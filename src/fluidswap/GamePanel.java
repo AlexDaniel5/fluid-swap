@@ -62,7 +62,16 @@ public final class GamePanel extends JPanel {
             drawBlock(g2, b);
         }
 
-        // Player circle.
+        // Water regions (drawn translucent, under the player).
+        for (Water w : world.waters) {
+            g2.setColor(new Color(60, 140, 230, 120));
+            g2.fillRect((int) w.x, (int) w.y, (int) w.width, (int) w.height);
+            g2.setColor(new Color(120, 190, 255, 160));
+            g2.setStroke(new BasicStroke(2f));
+            g2.drawLine((int) w.left(), (int) w.top(), (int) w.right(), (int) w.top());
+        }
+
+        // Player: circle sprite (its collision hitbox is a box of the same bounds).
         Player p = world.player;
         int d = (int) (p.radius * 2);
         g2.setColor(new Color(90, 200, 255));
@@ -71,8 +80,10 @@ public final class GamePanel extends JPanel {
         g2.setStroke(new BasicStroke(2f));
         g2.drawOval((int) (p.pos.x - p.radius), (int) (p.pos.y - p.radius), d, d);
 
+        String medium = p.inWater ? "WATER (fast)" : (p.onGround ? "LAND (slow)" : "AIR (medium)");
         g2.setColor(new Color(150, 160, 180));
-        g2.drawString("Move: A/D or ←/→   Jump: Space/W/↑", 12, 20);
+        g2.drawString("Move: A/D or ←/→   Jump/Swim: Space/W/↑", 12, 20);
+        g2.drawString("Medium: " + medium + "   speed=" + (int) world.activeMoveSpeed(), 12, 38);
     }
 
     private void drawBlock(Graphics2D g2, Block b) {

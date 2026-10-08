@@ -4,22 +4,36 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Holds the player and terrain and advances the simulation. This is kept free
+ * Holds the player, terrain, and water, and advances the simulation. Kept free
  * of any rendering/windowing code so it can be driven headlessly by tests.
  *
- * NOTE: "glowing areas" that grant the player effects are intentionally NOT
- * implemented yet. They would live here as a separate list of trigger regions
- * checked after movement; the collision pipeline below is structured to make
- * adding them straightforward.
+ * Movement speed depends on the medium the character is in:
+ *   - slowest when standing on land (grounded),
+ *   - medium while airborne,
+ *   - fastest while in water.
+ *
+ * NOTE: "glowing areas" that grant the player effects are still intentionally
+ * NOT implemented. They would be another list of trigger regions checked like
+ * water is below.
  */
 public final class World {
 
     public static final double GRAVITY = 1800.0;      // px / s^2
-    public static final double MOVE_SPEED = 320.0;    // px / s
     public static final double JUMP_SPEED = 720.0;    // px / s
+
+    // Horizontal movement speeds by medium (px / s).
+    public static final double LAND_SPEED = 140.0;    // slowest
+    public static final double AIR_SPEED = 240.0;     // medium
+    public static final double WATER_SPEED = 420.0;   // fastest
+
+    // In water the character sinks slowly and can swim; gravity is reduced and
+    // damped so it stays interactive rather than dropping like a stone.
+    public static final double WATER_GRAVITY_SCALE = 0.25;
+    public static final double WATER_DRAG = 3.0;      // per-second velocity damping
 
     public final Player player;
     public final List<Block> blocks = new ArrayList<>();
+    public final List<Water> waters = new ArrayList<>();
 
     // Input intent, set by the controller each frame.
     public double moveDir = 0;       // -1 left, +1 right, 0 none
@@ -29,24 +43,39 @@ public final class World {
         this.player = player;
     }
 
-    public void addBlock(Block b) {
-        blocks.add(b);
+    public void addBlock(Block b) { blocks.add(b); }
+    public void addWater(Water w) { waters.add(w); }
+
+    /** The active horizontal speed given the character's current medium. */
+    public double activeMoveSpeed() {
+        if (player.inWater) {
+            return WATER_SPEED;
+        }
+        return player.onGround ? LAND_SPEED : AIR_SPEED;
     }
 
     /** Advance the simulation by {@code dt} seconds. */
     public void step(double dt) {
-        // Horizontal intent.
-        player.vel.x = moveDir * MOVE_SPEED;
+        // Determine medium from current position (water + previous grounded state).
+        player.inWater = overlapsAnyWater();
 
-        // Jump only when grounded.
-        if (jumpRequested && player.onGround) {
-            player.vel.y = -JUMP_SPEED;
+        // Horizontal intent at the speed for the current medium.
+        player.vel.x = moveDir * activeMoveSpeed();
+
+        // Jump / swim-up when grounded or in water.
+        if (jumpRequested && (player.onGround || player.inWater)) {
+            player.vel.y = -JUMP_SPEED * (player.inWater ? 0.7 : 1.0);
             player.onGround = false;
         }
         jumpRequested = false;
 
-        // Gravity.
-        player.vel.y += GRAVITY * dt;
+        // Gravity (reduced in water) and water drag.
+        double gravity = GRAVITY * (player.inWater ? WATER_GRAVITY_SCALE : 1.0);
+        player.vel.y += gravity * dt;
+        if (player.inWater) {
+            double damp = Math.max(0, 1.0 - WATER_DRAG * dt);
+            player.vel.y *= damp;
+        }
 
         // Integrate.
         player.pos.add(player.vel.x * dt, player.vel.y * dt);
@@ -72,5 +101,17 @@ public final class World {
                 player.onGround = true;
             }
         }
+
+        // Re-evaluate water after moving so state is accurate for rendering.
+        player.inWater = overlapsAnyWater();
+    }
+
+    private boolean overlapsAnyWater() {
+        for (Water w : waters) {
+            if (Collision.intersects(player, w)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

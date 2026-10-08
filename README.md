@@ -2,11 +2,19 @@
 
 A tiny 2D game in plain Java (Swing/Java2D — no build tools or dependencies).
 
-The main character is a **circle** that collides with **box-shaped terrain**.
+The main character is drawn as a **circle** but has a **box (AABB) hitbox**
+matching the circle's bounds. It collides with **box-shaped terrain**.
 Terrain blocks come in three visual flavors (collision is identical AABB for all):
 - `SOLID` — plain box
 - `CREST` — ridged top edge (hill cap / platform lip)
 - `BLOTCHY` — speckled rough ground
+
+The map also has **water** regions (non-solid). Movement speed depends on the
+medium the character is in:
+- **Land** (grounded) — slowest (`LAND_SPEED = 140`)
+- **Air** — medium (`AIR_SPEED = 240`)
+- **Water** — fastest (`WATER_SPEED = 420`); gravity is reduced and Space lets
+  you swim up.
 
 ## Run
 
@@ -29,10 +37,11 @@ Controls: **A/D** or **←/→** to move, **Space / W / ↑** to jump.
 
 | File | Role |
 |------|------|
-| `Player.java` | the circle character + physics state |
+| `Player.java` | the character: circle sprite + box hitbox + physics state |
 | `Block.java` | a box of terrain (with a visual `Type`) |
-| `Collision.java` | circle-vs-AABB detection and resolution |
-| `World.java` | physics step + collision pipeline (no rendering — testable) |
+| `Water.java` | a non-solid water region |
+| `Collision.java` | AABB-vs-AABB detection and resolution |
+| `World.java` | physics step, medium-based speed, collision pipeline (no rendering — testable) |
 | `Level.java` | the demo level layout |
 | `GamePanel.java` / `Main.java` | Swing window, game loop, rendering |
 | `CollisionTest.java` | headless assertions that the circle collides with terrain |

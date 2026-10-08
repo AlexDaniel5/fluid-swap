@@ -18,6 +18,8 @@ public final class CollisionTest {
         testBallStoppedByWall();
         testBallFallsThroughEmptySpace();
         testCornerPushOut();
+        testSpeedByMedium();
+        testWaterDetection();
 
         System.out.printf("%n%d passed, %d failed%n", passed, failed);
         if (failed > 0) {
@@ -91,6 +93,50 @@ public final class CollisionTest {
         // Applying the push should remove the overlap.
         p.pos.add(hit.pushX, hit.pushY);
         check("push resolves the corner overlap", !Collision.intersects(p, b));
+    }
+
+    private static void testSpeedByMedium() {
+        Player p = new Player(100, 100, 20);
+        World w = new World(p);
+
+        p.inWater = false; p.onGround = true;
+        check("land speed is slowest", w.activeMoveSpeed() == World.LAND_SPEED);
+
+        p.onGround = false;
+        check("air speed is medium", w.activeMoveSpeed() == World.AIR_SPEED);
+
+        p.inWater = true;
+        check("water speed is fastest", w.activeMoveSpeed() == World.WATER_SPEED);
+
+        check("ordering land < air < water",
+                World.LAND_SPEED < World.AIR_SPEED && World.AIR_SPEED < World.WATER_SPEED);
+    }
+
+    private static void testWaterDetection() {
+        Player p = new Player(100, 300, 20);
+        World w = new World(p);
+        w.addWater(new Water(50, 200, 200, 200)); // covers the player
+        w.step(1.0 / 240.0);
+        check("player detected in water", p.inWater);
+
+        // Moving in water uses the fast speed and covers more ground than on land.
+        Player land = new Player(100, 100, 20);
+        World lw = new World(land);
+        lw.addBlock(new Block(0, 140, 400, 60, Block.Type.CREST)); // floor to stand on
+        land.onGround = true;
+        lw.moveDir = 1;
+        for (int i = 0; i < 60; i++) lw.step(1.0 / 60.0);
+
+        Player swim = new Player(100, 300, 20);
+        World sw = new World(swim);
+        sw.addWater(new Water(-1000, 0, 4000, 2000)); // big pool, always in water
+        sw.moveDir = 1;
+        for (int i = 0; i < 60; i++) sw.step(1.0 / 60.0);
+
+        double landDist = land.pos.x - 100;
+        double swimDist = swim.pos.x - 100;
+        check("travels farther in water than on land (water=" + round(swimDist)
+                + ", land=" + round(landDist) + ")", swimDist > landDist);
     }
 
     // --- helpers ---------------------------------------------------------

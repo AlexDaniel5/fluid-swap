@@ -1,17 +1,17 @@
 package fluidswap;
 
-/** Circle-vs-AABB collision detection and resolution. */
+/** AABB-vs-AABB collision detection and resolution (player box vs terrain box). */
 public final class Collision {
 
     private Collision() {}
 
-    /** Result of resolving one circle against one block. */
+    /** Result of resolving the player box against one block. */
     public static final class Hit {
         public final boolean collided;
-        /** How far the circle was pushed out, along the collision normal. */
+        /** How far the box was pushed out, along the collision normal. */
         public final double pushX;
         public final double pushY;
-        /** Unit normal pointing from the block toward the circle. */
+        /** Unit normal pointing from the block toward the player. */
         public final double normalX;
         public final double normalY;
 
@@ -26,62 +26,45 @@ public final class Collision {
         static final Hit NONE = new Hit(false, 0, 0, 0, 0);
     }
 
-    /** @return true if the circle overlaps the block at all. */
+    /** @return true if the player's box overlaps the block's box at all. */
     public static boolean intersects(Player p, Block b) {
-        double cx = clamp(p.pos.x, b.left(), b.right());
-        double cy = clamp(p.pos.y, b.top(), b.bottom());
-        double dx = p.pos.x - cx;
-        double dy = p.pos.y - cy;
-        return (dx * dx + dy * dy) < (p.radius * p.radius);
+        return p.right() > b.left() && p.left() < b.right()
+            && p.bottom() > b.top() && p.top() < b.bottom();
+    }
+
+    /** @return true if the player's box overlaps a water region. */
+    public static boolean intersects(Player p, Water w) {
+        return p.right() > w.left() && p.left() < w.right()
+            && p.bottom() > w.top() && p.top() < w.bottom();
     }
 
     /**
-     * Compute how to separate the circle from the block. Finds the closest
-     * point on the box to the circle center, then pushes the circle out along
-     * the vector to that point (or out the nearest face if the center is
-     * inside the box).
+     * Separate the player box from the block using the minimum translation
+     * vector: push out along whichever axis has the smaller penetration.
      */
     public static Hit resolve(Player p, Block b) {
-        double closestX = clamp(p.pos.x, b.left(), b.right());
-        double closestY = clamp(p.pos.y, b.top(), b.bottom());
-
-        double dx = p.pos.x - closestX;
-        double dy = p.pos.y - closestY;
-        double distSq = dx * dx + dy * dy;
-        double r = p.radius;
-
-        if (distSq >= r * r) {
+        if (!intersects(p, b)) {
             return Hit.NONE;
         }
 
-        if (distSq > 1e-9) {
-            // Center is outside the box: push along the line to the closest point.
-            double dist = Math.sqrt(distSq);
-            double nx = dx / dist;
-            double ny = dy / dist;
-            double overlap = r - dist;
-            return new Hit(true, nx * overlap, ny * overlap, nx, ny);
-        }
+        // Overlap depth on each axis.
+        double overlapX = Math.min(p.right(), b.right()) - Math.max(p.left(), b.left());
+        double overlapY = Math.min(p.bottom(), b.bottom()) - Math.max(p.top(), b.top());
 
-        // Center is inside the box: eject out of the nearest face.
-        double leftPen = p.pos.x - b.left();
-        double rightPen = b.right() - p.pos.x;
-        double topPen = p.pos.y - b.top();
-        double bottomPen = b.bottom() - p.pos.y;
-
-        double minPen = Math.min(Math.min(leftPen, rightPen), Math.min(topPen, bottomPen));
-        if (minPen == leftPen) {
-            return new Hit(true, -(leftPen + r), 0, -1, 0);
-        } else if (minPen == rightPen) {
-            return new Hit(true, rightPen + r, 0, 1, 0);
-        } else if (minPen == topPen) {
-            return new Hit(true, 0, -(topPen + r), 0, -1);
+        if (overlapX < overlapY) {
+            // Resolve horizontally, toward whichever side the player center is on.
+            if (p.pos.x < (b.left() + b.right()) / 2.0) {
+                return new Hit(true, -overlapX, 0, -1, 0); // push left
+            } else {
+                return new Hit(true, overlapX, 0, 1, 0);   // push right
+            }
         } else {
-            return new Hit(true, 0, bottomPen + r, 0, 1);
+            // Resolve vertically.
+            if (p.pos.y < (b.top() + b.bottom()) / 2.0) {
+                return new Hit(true, 0, -overlapY, 0, -1); // push up (landing on top)
+            } else {
+                return new Hit(true, 0, overlapY, 0, 1);   // push down (hit ceiling)
+            }
         }
-    }
-
-    private static double clamp(double v, double lo, double hi) {
-        return v < lo ? lo : (v > hi ? hi : v);
     }
 }
