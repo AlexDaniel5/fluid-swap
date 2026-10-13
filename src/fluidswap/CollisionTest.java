@@ -18,6 +18,7 @@ public final class CollisionTest {
         testBallStoppedByWall();
         testBallFallsThroughEmptySpace();
         testCornerPushOut();
+        testGradualTurnAround();
         testSpeedByMedium();
         testWaterDetection();
 
@@ -137,6 +138,31 @@ public final class CollisionTest {
         double swimDist = swim.pos.x - 100;
         check("travels farther in water than on land (water=" + round(swimDist)
                 + ", land=" + round(landDist) + ")", swimDist > landDist);
+    }
+
+    private static void testGradualTurnAround() {
+        Player p = new Player(100, 100, 20);
+        World w = new World(p);
+        w.addBlock(new Block(-2000, 120, 6000, 60, Block.Type.CREST)); // long floor
+        w.moveDir = 1;
+        simulate(w, 1.0);
+        check("reaches land top speed moving right (got " + round(p.vel.x) + ")",
+                Math.abs(p.vel.x - World.LAND_SPEED) < 0.01);
+
+        w.moveDir = -1;
+        w.step(1.0 / 60.0);
+        check("one frame after reversing, still moving right (got " + round(p.vel.x) + ")",
+                p.vel.x > 0);
+
+        simulate(w, 1.0);
+        check("eventually reaches top speed moving left (got " + round(p.vel.x) + ")",
+                Math.abs(p.vel.x + World.LAND_SPEED) < 0.01);
+
+        w.moveDir = 0;
+        w.step(1.0 / 60.0);
+        check("releasing input slows rather than stops instantly", p.vel.x < 0);
+        simulate(w, 1.0);
+        check("coasts to a stop with no input", p.vel.x == 0);
     }
 
     // --- helpers ---------------------------------------------------------

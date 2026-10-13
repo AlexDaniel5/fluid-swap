@@ -26,6 +26,22 @@ public final class World {
     public static final double AIR_SPEED = 240.0;     // medium
     public static final double WATER_SPEED = 420.0;   // fastest
 
+    // Horizontal momentum by medium (px / s^2). Velocity eases toward the input
+    // target instead of snapping to it, so reversing direction is a gradual
+    // slow-down-then-speed-up rather than an instant flip.
+    //   ACCEL    - speeding up in the held direction
+    //   TURN     - braking while holding the opposite direction
+    //   FRICTION - slowing down with no input (or when over the medium's top speed)
+    public static final double LAND_ACCEL = 1200.0;
+    public static final double LAND_TURN = 1600.0;
+    public static final double LAND_FRICTION = 1400.0;
+    public static final double AIR_ACCEL = 1800.0;
+    public static final double AIR_TURN = 2000.0;
+    public static final double AIR_FRICTION = 800.0;
+    public static final double WATER_ACCEL = 2800.0;
+    public static final double WATER_TURN = 3000.0;
+    public static final double WATER_FRICTION = 1500.0;
+
     // In water the character sinks slowly and can swim; gravity is reduced and
     // damped so it stays interactive rather than dropping like a stone.
     public static final double WATER_GRAVITY_SCALE = 0.25;
@@ -59,8 +75,8 @@ public final class World {
         // Determine medium from current position (water + previous grounded state).
         player.inWater = overlapsAnyWater();
 
-        // Horizontal intent at the speed for the current medium.
-        player.vel.x = moveDir * activeMoveSpeed();
+        // Ease horizontal velocity toward the intended speed for this medium.
+        player.vel.x = steerHorizontal(player.vel.x, moveDir * activeMoveSpeed(), dt);
 
         // Jump / swim-up when grounded or in water.
         if (jumpRequested && (player.onGround || player.inWater)) {
@@ -104,6 +120,37 @@ public final class World {
 
         // Re-evaluate water after moving so state is accurate for rendering.
         player.inWater = overlapsAnyWater();
+    }
+
+    /**
+     * Move {@code vx} toward {@code target} by at most rate*dt, where the rate
+     * depends on whether we're accelerating, turning around, or coasting.
+     */
+    private double steerHorizontal(double vx, double target, double dt) {
+        double accel, turn, friction;
+        if (player.inWater) {
+            accel = WATER_ACCEL; turn = WATER_TURN; friction = WATER_FRICTION;
+        } else if (player.onGround) {
+            accel = LAND_ACCEL; turn = LAND_TURN; friction = LAND_FRICTION;
+        } else {
+            accel = AIR_ACCEL; turn = AIR_TURN; friction = AIR_FRICTION;
+        }
+
+        double rate;
+        if (target == 0 || Math.abs(vx) > Math.abs(target) && Math.signum(vx) == Math.signum(target)) {
+            rate = friction;                 // coasting, or above this medium's top speed
+        } else if (vx != 0 && Math.signum(vx) != Math.signum(target)) {
+            rate = turn;                     // braking against current motion
+        } else {
+            rate = accel;                    // speeding up in the held direction
+        }
+
+        double maxChange = rate * dt;
+        double diff = target - vx;
+        if (Math.abs(diff) <= maxChange) {
+            return target;
+        }
+        return vx + Math.signum(diff) * maxChange;
     }
 
     private boolean overlapsAnyWater() {
