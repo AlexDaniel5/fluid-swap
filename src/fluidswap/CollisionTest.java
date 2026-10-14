@@ -21,6 +21,8 @@ public final class CollisionTest {
         testGradualTurnAround();
         testSpeedByMedium();
         testWaterDetection();
+        testTurnAroundTimeIsSpeedIndependent();
+        testWaterJumpFasterThanLand();
         testWaterfallDetection();
         testWaterfallClimbUp();
         testWaterfallSlipIsSlow();
@@ -168,14 +170,73 @@ public final class CollisionTest {
         check("coasts to a stop with no input", p.vel.x == 0);
     }
 
+    private static void testTurnAroundTimeIsSpeedIndependent() {
+        // Reversing direction should take about the same (short) time whether
+        // you're crawling on land or racing through water — not proportional to
+        // speed. We count frames for vx to cross back through zero.
+        int landFrames = framesToReverse(false);
+        int waterFrames = framesToReverse(true);
+
+        check("fast (water) turnaround isn't much slower than slow (land) one"
+                + " (land=" + landFrames + "f, water=" + waterFrames + "f)",
+                waterFrames <= landFrames + 2);
+        check("turnaround is quick (land reverses within ~0.1s: " + landFrames + "f)",
+                landFrames <= 25); // 25 frames @240Hz ≈ 0.1s
+    }
+
+    /** Frames for vx to cross back through zero after reversing input at top speed. */
+    private static int framesToReverse(boolean inWater) {
+        double dt = 1.0 / 240.0;
+        Player p = new Player(100, 100, 20);
+        World w = new World(p);
+        if (inWater) {
+            w.addWater(new Water(-5000, 0, 10000, 5000));
+        } else {
+            w.addBlock(new Block(-5000, 120, 10000, 60, Block.Type.CREST));
+            p.onGround = true;
+        }
+        w.moveDir = 1;
+        for (int i = 0; i < 240; i++) w.step(dt); // reach top speed moving right
+        w.moveDir = -1;                            // flip input
+        int frames = 0;
+        while (p.vel.x > 0 && frames < 1000) { w.step(dt); frames++; }
+        return frames;
+    }
+
+    private static void testWaterJumpFasterThanLand() {
+        // Jumping out of water should launch faster than a land jump.
+        Player land = new Player(100, 100, 20);
+        World lw = new World(land);
+        land.onGround = true;
+        lw.jumpRequested = true;
+        lw.step(1.0 / 240.0);
+        double landJumpSpeed = -land.vel.y; // upward is negative
+
+        Player swim = new Player(100, 300, 20);
+        World sw = new World(swim);
+        sw.addWater(new Water(0, 200, 400, 400)); // player submerged
+        sw.jumpRequested = true;
+        sw.step(1.0 / 240.0);
+        double waterJumpSpeed = -swim.vel.y;
+
+        check("water jump launches faster than land jump (water=" + round(waterJumpSpeed)
+                + ", land=" + round(landJumpSpeed) + ")", waterJumpSpeed > landJumpSpeed);
+        // Land jump is essentially JUMP_SPEED (minus one frame of gravity).
+        check("land jump speed unchanged (~JUMP_SPEED, got " + round(landJumpSpeed) + ")",
+                Math.abs(landJumpSpeed - World.JUMP_SPEED) < 10);
+    }
+
     private static void testWaterfallDetection() {
         Player p = new Player(100, 300, 20);
         World w = new World(p);
         w.addWaterfall(new Waterfall(60, 100, 80, 400)); // covers the player
         w.step(1.0 / 240.0);
         check("player detected on waterfall", p.onWaterfall);
-        check("waterfall move speed is slow (climb pace)",
-                w.activeMoveSpeed() == World.WATERFALL_MOVE_SPEED);
+        // A waterfall only governs vertical climbing; horizontal speed is the
+        // normal medium (airborne here, since not grounded or in water).
+        check("waterfall leaves horizontal speed unaffected (got "
+                + round(w.activeMoveSpeed()) + ")",
+                w.activeMoveSpeed() == World.AIR_SPEED);
     }
 
     private static void testWaterfallClimbUp() {

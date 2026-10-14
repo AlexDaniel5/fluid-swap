@@ -23,7 +23,10 @@ import java.util.List;
 public final class World {
 
     public static final double GRAVITY = 1800.0;      // px / s^2
-    public static final double JUMP_SPEED = 720.0;    // px / s
+    public static final double JUMP_SPEED = 720.0;    // px / s (off land)
+    // Leaping out of water is springier than a standing land jump: the water
+    // launches the character up faster.
+    public static final double WATER_JUMP_SCALE = 1.4;
 
     // Horizontal movement speeds by medium (px / s).
     public static final double LAND_SPEED = 140.0;    // slowest
@@ -45,6 +48,11 @@ public final class World {
     public static final double WATER_ACCEL = 2800.0;
     public static final double WATER_TURN = 3000.0;
     public static final double WATER_FRICTION = 1500.0;
+    // Turning around is a roughly constant-TIME maneuver, not constant force:
+    // the brake rate scales with how fast you're going, so reversing at water
+    // speed is just as snappy as reversing at a slow walk. The per-medium TURN
+    // above acts as a floor so slow turns stay crisp. Smaller = quicker.
+    public static final double TURN_TIME = 0.07;      // seconds to bleed off speed
 
     // In water the character sinks slowly and can swim; gravity is reduced and
     // damped so it stays interactive rather than dropping like a stone.
@@ -56,7 +64,6 @@ public final class World {
     // vertical input is held.
     public static final double CLIMB_SPEED = 90.0;         // up/down climb (slow)
     public static final double WATERFALL_SLIP = 45.0;      // gentle downward drift
-    public static final double WATERFALL_MOVE_SPEED = 100.0; // sideways while clinging
 
     public final Player player;
     public final List<Block> blocks = new ArrayList<>();
@@ -77,11 +84,12 @@ public final class World {
     public void addWater(Water w) { waters.add(w); }
     public void addWaterfall(Waterfall f) { waterfalls.add(f); }
 
-    /** The active horizontal speed given the character's current medium. */
+    /**
+     * The active horizontal speed given the character's current medium. A
+     * waterfall only governs vertical climbing — horizontal speed is unaffected
+     * by it, so it uses the normal water/land/air value.
+     */
     public double activeMoveSpeed() {
-        if (player.onWaterfall) {
-            return WATERFALL_MOVE_SPEED;
-        }
         if (player.inWater) {
             return WATER_SPEED;
         }
@@ -112,7 +120,7 @@ public final class World {
         } else {
             // Jump / swim-up when grounded or in water.
             if (jumpRequested && (player.onGround || player.inWater)) {
-                player.vel.y = -JUMP_SPEED * (player.inWater ? 0.7 : 1.0);
+                player.vel.y = -JUMP_SPEED * (player.inWater ? WATER_JUMP_SCALE : 1.0);
                 player.onGround = false;
             }
             jumpRequested = false;
@@ -174,7 +182,10 @@ public final class World {
         if (target == 0 || Math.abs(vx) > Math.abs(target) && Math.signum(vx) == Math.signum(target)) {
             rate = friction;                 // coasting, or above this medium's top speed
         } else if (vx != 0 && Math.signum(vx) != Math.signum(target)) {
-            rate = turn;                     // braking against current motion
+            // Braking against current motion (turning around): scale with the
+            // reverse top speed so the maneuver takes ~TURN_TIME regardless of
+            // how fast we're going. The medium's turn rate acts as a floor.
+            rate = Math.max(turn, Math.abs(target) / TURN_TIME);
         } else {
             rate = accel;                    // speeding up in the held direction
         }
