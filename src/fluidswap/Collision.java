@@ -38,6 +38,12 @@ public final class Collision {
             && p.bottom() > w.top() && p.top() < w.bottom();
     }
 
+    /** @return true if the player's box overlaps a waterfall column. */
+    public static boolean intersects(Player p, Waterfall f) {
+        return p.right() > f.left() && p.left() < f.right()
+            && p.bottom() > f.top() && p.top() < f.bottom();
+    }
+
     /**
      * Separate the player box from the block using the minimum translation
      * vector: push out along whichever axis has the smaller penetration.

@@ -17,7 +17,8 @@ public final class GamePanel extends JPanel {
 
     private final World world;
 
-    private boolean left, right, jump;
+    private boolean left, right, jump, down;
+    private long frame; // animation counter for the waterfalls
 
     public GamePanel(World world) {
         this.world = world;
@@ -40,6 +41,7 @@ public final class GamePanel extends JPanel {
             case KeyEvent.VK_LEFT, KeyEvent.VK_A -> left = down;
             case KeyEvent.VK_RIGHT, KeyEvent.VK_D -> right = down;
             case KeyEvent.VK_SPACE, KeyEvent.VK_UP, KeyEvent.VK_W -> jump = down;
+            case KeyEvent.VK_DOWN, KeyEvent.VK_S -> this.down = down;
         }
     }
 
@@ -48,7 +50,10 @@ public final class GamePanel extends JPanel {
         if (jump) {
             world.jumpRequested = true;
         }
+        world.climbUp = jump;    // hold up/jump to climb a waterfall
+        world.climbDown = down;  // hold down to descend a waterfall
         world.step(dt);
+        frame++;
         repaint();
     }
 
@@ -71,6 +76,11 @@ public final class GamePanel extends JPanel {
             g2.drawLine((int) w.left(), (int) w.top(), (int) w.right(), (int) w.top());
         }
 
+        // Waterfalls: translucent column with animated downward streaks.
+        for (Waterfall f : world.waterfalls) {
+            drawWaterfall(g2, f);
+        }
+
         // Player: circle sprite (its collision hitbox is a box of the same bounds).
         Player p = world.player;
         int d = (int) (p.radius * 2);
@@ -80,10 +90,44 @@ public final class GamePanel extends JPanel {
         g2.setStroke(new BasicStroke(2f));
         g2.drawOval((int) (p.pos.x - p.radius), (int) (p.pos.y - p.radius), d, d);
 
-        String medium = p.inWater ? "WATER (fast)" : (p.onGround ? "LAND (slow)" : "AIR (medium)");
+        String medium = p.onWaterfall ? "WATERFALL (climb)"
+                : p.inWater ? "WATER (fast)"
+                : (p.onGround ? "LAND (slow)" : "AIR (medium)");
         g2.setColor(new Color(150, 160, 180));
-        g2.drawString("Move: A/D or ←/→   Jump/Swim: Space/W/↑", 12, 20);
+        g2.drawString("Move: A/D or ←/→   Jump/Swim/Climb up: Space/W/↑   Climb down: S/↓", 12, 20);
         g2.drawString("Medium: " + medium + "   speed=" + (int) world.activeMoveSpeed(), 12, 38);
+    }
+
+    /** Translucent blue column with streaks that scroll downward over time. */
+    private void drawWaterfall(Graphics2D g2, Waterfall f) {
+        int x = (int) f.x, y = (int) f.y, w = (int) f.width, h = (int) f.height;
+
+        g2.setColor(new Color(70, 170, 240, 110));
+        g2.fillRect(x, y, w, h);
+
+        // Falling streaks: thin vertical highlights whose phase scrolls down.
+        g2.setStroke(new BasicStroke(2f));
+        Random r = new Random(((long) x << 16) ^ y); // stable lane layout per fall
+        int lanes = Math.max(3, w / 14);
+        int scroll = (int) ((frame * 6) % 48); // downward motion, wraps every 48px
+        for (int i = 0; i < lanes; i++) {
+            int lx = x + 4 + r.nextInt(Math.max(1, w - 8));
+            int alpha = 120 + r.nextInt(100);
+            g2.setColor(new Color(200, 235, 255, alpha));
+            // Dashes marching downward within the column.
+            for (int sy = y - 48 + (scroll + r.nextInt(48)) % 48; sy < y + h; sy += 48) {
+                int y1 = Math.max(y, sy);
+                int y2 = Math.min(y + h, sy + 26);
+                if (y2 > y1) {
+                    g2.drawLine(lx, y1, lx, y2);
+                }
+            }
+        }
+
+        // Bright lip where the water pours over the top.
+        g2.setColor(new Color(220, 245, 255, 200));
+        g2.setStroke(new BasicStroke(3f));
+        g2.drawLine(x, y, x + w, y);
     }
 
     private void drawBlock(Graphics2D g2, Block b) {

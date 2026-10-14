@@ -21,6 +21,9 @@ public final class CollisionTest {
         testGradualTurnAround();
         testSpeedByMedium();
         testWaterDetection();
+        testWaterfallDetection();
+        testWaterfallClimbUp();
+        testWaterfallSlipIsSlow();
 
         System.out.printf("%n%d passed, %d failed%n", passed, failed);
         if (failed > 0) {
@@ -163,6 +166,53 @@ public final class CollisionTest {
         check("releasing input slows rather than stops instantly", p.vel.x < 0);
         simulate(w, 1.0);
         check("coasts to a stop with no input", p.vel.x == 0);
+    }
+
+    private static void testWaterfallDetection() {
+        Player p = new Player(100, 300, 20);
+        World w = new World(p);
+        w.addWaterfall(new Waterfall(60, 100, 80, 400)); // covers the player
+        w.step(1.0 / 240.0);
+        check("player detected on waterfall", p.onWaterfall);
+        check("waterfall move speed is slow (climb pace)",
+                w.activeMoveSpeed() == World.WATERFALL_MOVE_SPEED);
+    }
+
+    private static void testWaterfallClimbUp() {
+        Player p = new Player(100, 400, 20);
+        World w = new World(p);
+        w.addWaterfall(new Waterfall(60, 0, 80, 800)); // tall column around the player
+        w.climbUp = true;                               // hold "up" to climb
+
+        double startY = p.pos.y;
+        simulate(w, 1.0);
+
+        // Climbing beats gravity: the player ends up clearly higher than it began.
+        check("holding up climbs the waterfall (rose from " + round(startY)
+                + " to " + round(p.pos.y) + ")", p.pos.y < startY - 50);
+        check("still on the waterfall while climbing", p.onWaterfall);
+    }
+
+    private static void testWaterfallSlipIsSlow() {
+        // On a waterfall with no input, the player slips down far slower than a
+        // real gravity free-fall would carry them over the same time.
+        Player p = new Player(100, 100, 20);
+        World w = new World(p);
+        w.addWaterfall(new Waterfall(60, 0, 80, 4000));
+        double startY = p.pos.y;
+        simulate(w, 1.0);
+        double slipDist = p.pos.y - startY;
+
+        Player fall = new Player(100, 100, 20);
+        World fw = new World(fall); // empty: pure gravity free-fall
+        double fallStart = fall.pos.y;
+        simulate(fw, 1.0);
+        double fallDist = fall.pos.y - fallStart;
+
+        check("clinging slip is downward but gentle (slip=" + round(slipDist) + ")",
+                slipDist > 0 && slipDist < 120);
+        check("clinging is far slower than free-fall (slip=" + round(slipDist)
+                + ", freefall=" + round(fallDist) + ")", slipDist < fallDist / 2);
     }
 
     // --- helpers ---------------------------------------------------------

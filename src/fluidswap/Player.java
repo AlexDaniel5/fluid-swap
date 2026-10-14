@@ -15,6 +15,8 @@ public final class Player {
     public boolean onGround = false;
     /** True when the hitbox overlaps a water region. */
     public boolean inWater = false;
+    /** True when the hitbox overlaps a waterfall column (can cling and climb). */
+    public boolean onWaterfall = false;
 
     public Player(double x, double y, double radius) {
         this.pos = new Vec2(x, y);

@@ -15,6 +15,14 @@ medium the character is in:
 - **Air** — medium (`AIR_SPEED = 240`)
 - **Water** — fastest (`WATER_SPEED = 420`); gravity is reduced and Space lets
   you swim up.
+- **Waterfall** — a vertical column of falling water you can **cling to and
+  climb slowly** (`CLIMB_SPEED = 90`, up *or* down). Gravity is ignored while
+  clinging; with no vertical input you slip down gently (`WATERFALL_SLIP = 45`).
+
+The demo level is a chain of floating **islands** at increasing heights above a
+sea, connected by four **waterfalls**. The intended route climbs from the sea up
+to the mid island, then the high island, then the top rock — each hop is a slow
+waterfall climb.
 
 ## Run
 
@@ -31,7 +39,8 @@ java -cp out fluidswap.Main            # game
 java -cp out fluidswap.CollisionTest   # tests
 ```
 
-Controls: **A/D** or **←/→** to move, **Space / W / ↑** to jump.
+Controls: **A/D** or **←/→** to move, **Space / W / ↑** to jump / swim up /
+climb a waterfall up, **S / ↓** to climb a waterfall down.
 
 ## Layout
 
@@ -40,6 +49,7 @@ Controls: **A/D** or **←/→** to move, **Space / W / ↑** to jump.
 | `Player.java` | the character: circle sprite + box hitbox + physics state |
 | `Block.java` | a box of terrain (with a visual `Type`) |
 | `Water.java` | a non-solid water region |
+| `Waterfall.java` | a non-solid vertical column you cling to and climb slowly |
 | `Collision.java` | AABB-vs-AABB detection and resolution |
 | `World.java` | physics step, medium-based speed, collision pipeline (no rendering — testable) |
 | `Level.java` | the demo level layout |

@@ -12,9 +12,13 @@ import java.util.List;
  *   - medium while airborne,
  *   - fastest while in water.
  *
+ * Waterfalls are a fourth kind of region: while clinging to one the character
+ * ignores gravity and can climb up or down slowly, which is how the islands at
+ * different heights are reached.
+ *
  * NOTE: "glowing areas" that grant the player effects are still intentionally
  * NOT implemented. They would be another list of trigger regions checked like
- * water is below.
+ * water / waterfalls are below.
  */
 public final class World {
 
@@ -47,13 +51,23 @@ public final class World {
     public static final double WATER_GRAVITY_SCALE = 0.25;
     public static final double WATER_DRAG = 3.0;      // per-second velocity damping
 
+    // Waterfall climbing. Gravity is ignored while clinging; the character
+    // climbs up/down at a deliberately slow pace, and slips down gently when no
+    // vertical input is held.
+    public static final double CLIMB_SPEED = 90.0;         // up/down climb (slow)
+    public static final double WATERFALL_SLIP = 45.0;      // gentle downward drift
+    public static final double WATERFALL_MOVE_SPEED = 100.0; // sideways while clinging
+
     public final Player player;
     public final List<Block> blocks = new ArrayList<>();
     public final List<Water> waters = new ArrayList<>();
+    public final List<Waterfall> waterfalls = new ArrayList<>();
 
     // Input intent, set by the controller each frame.
     public double moveDir = 0;       // -1 left, +1 right, 0 none
     public boolean jumpRequested = false;
+    public boolean climbUp = false;  // up/jump key held (climb a waterfall)
+    public boolean climbDown = false; // down key held (descend a waterfall)
 
     public World(Player player) {
         this.player = player;
@@ -61,9 +75,13 @@ public final class World {
 
     public void addBlock(Block b) { blocks.add(b); }
     public void addWater(Water w) { waters.add(w); }
+    public void addWaterfall(Waterfall f) { waterfalls.add(f); }
 
     /** The active horizontal speed given the character's current medium. */
     public double activeMoveSpeed() {
+        if (player.onWaterfall) {
+            return WATERFALL_MOVE_SPEED;
+        }
         if (player.inWater) {
             return WATER_SPEED;
         }
@@ -74,23 +92,38 @@ public final class World {
     public void step(double dt) {
         // Determine medium from current position (water + previous grounded state).
         player.inWater = overlapsAnyWater();
+        player.onWaterfall = overlapsAnyWaterfall();
 
         // Ease horizontal velocity toward the intended speed for this medium.
         player.vel.x = steerHorizontal(player.vel.x, moveDir * activeMoveSpeed(), dt);
 
-        // Jump / swim-up when grounded or in water.
-        if (jumpRequested && (player.onGround || player.inWater)) {
-            player.vel.y = -JUMP_SPEED * (player.inWater ? 0.7 : 1.0);
+        if (player.onWaterfall) {
+            // Cling to the rushing water: climb slowly up/down, or slip gently.
+            // Gravity is ignored while clinging.
+            if (climbUp && !climbDown) {
+                player.vel.y = -CLIMB_SPEED;
+            } else if (climbDown && !climbUp) {
+                player.vel.y = CLIMB_SPEED;
+            } else {
+                player.vel.y = WATERFALL_SLIP;
+            }
             player.onGround = false;
-        }
-        jumpRequested = false;
+            jumpRequested = false;
+        } else {
+            // Jump / swim-up when grounded or in water.
+            if (jumpRequested && (player.onGround || player.inWater)) {
+                player.vel.y = -JUMP_SPEED * (player.inWater ? 0.7 : 1.0);
+                player.onGround = false;
+            }
+            jumpRequested = false;
 
-        // Gravity (reduced in water) and water drag.
-        double gravity = GRAVITY * (player.inWater ? WATER_GRAVITY_SCALE : 1.0);
-        player.vel.y += gravity * dt;
-        if (player.inWater) {
-            double damp = Math.max(0, 1.0 - WATER_DRAG * dt);
-            player.vel.y *= damp;
+            // Gravity (reduced in water) and water drag.
+            double gravity = GRAVITY * (player.inWater ? WATER_GRAVITY_SCALE : 1.0);
+            player.vel.y += gravity * dt;
+            if (player.inWater) {
+                double damp = Math.max(0, 1.0 - WATER_DRAG * dt);
+                player.vel.y *= damp;
+            }
         }
 
         // Integrate.
@@ -118,8 +151,9 @@ public final class World {
             }
         }
 
-        // Re-evaluate water after moving so state is accurate for rendering.
+        // Re-evaluate region state after moving so it is accurate for rendering.
         player.inWater = overlapsAnyWater();
+        player.onWaterfall = overlapsAnyWaterfall();
     }
 
     /**
@@ -156,6 +190,15 @@ public final class World {
     private boolean overlapsAnyWater() {
         for (Water w : waters) {
             if (Collision.intersects(player, w)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean overlapsAnyWaterfall() {
+        for (Waterfall f : waterfalls) {
+            if (Collision.intersects(player, f)) {
                 return true;
             }
         }
