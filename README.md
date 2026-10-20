@@ -19,10 +19,11 @@ medium the character is in:
   climb slowly** (`CLIMB_SPEED = 90`, up *or* down). Gravity is ignored while
   clinging; with no vertical input you slip down gently (`WATERFALL_SLIP = 45`).
 
-The demo level is a chain of floating **islands** at increasing heights above a
-sea, connected by four **waterfalls**. The intended route climbs from the sea up
-to the mid island, then the high island, then the top rock — each hop is a slow
-waterfall climb.
+The demo level is a chain of big floating **islands** at increasing heights
+above a sea, connected by four **waterfalls**. Each island is a basin with a
+**pond** carved into its top — drop in and swim across. The intended route
+climbs from the sea up to the mid island, then the high island, then the top
+rock — each hop is a slow waterfall climb.
 
 ## Run
 
