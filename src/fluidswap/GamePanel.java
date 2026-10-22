@@ -15,14 +15,22 @@ import javax.swing.Timer;
 /** Swing panel: runs the fixed-step loop, reads keys, and draws the world. */
 public final class GamePanel extends JPanel {
 
+    // The window is a viewport into the (much larger) world; the camera scrolls.
+    public static final int VIEW_WIDTH = 1280;
+    public static final int VIEW_HEIGHT = 720;
+
     private final World world;
 
     private boolean left, right, jump, down;
     private long frame; // animation counter for the waterfalls
 
+    // Camera top-left in world coordinates (eased toward the player each tick).
+    private double camX, camY;
+    private boolean camInit;
+
     public GamePanel(World world) {
         this.world = world;
-        setPreferredSize(new Dimension(Level.WIDTH, Level.HEIGHT));
+        setPreferredSize(new Dimension(VIEW_WIDTH, VIEW_HEIGHT));
         setBackground(new Color(24, 26, 34));
         setFocusable(true);
 
@@ -53,8 +61,37 @@ public final class GamePanel extends JPanel {
         world.climbUp = jump;    // hold up/jump to climb a waterfall
         world.climbDown = down;  // hold down to descend a waterfall
         world.step(dt);
+        updateCamera(dt);
         frame++;
         repaint();
+    }
+
+    /** Ease the camera toward keeping the player centered, clamped to the world. */
+    private void updateCamera(double dt) {
+        int viewW = getWidth() > 0 ? getWidth() : VIEW_WIDTH;
+        int viewH = getHeight() > 0 ? getHeight() : VIEW_HEIGHT;
+        Player p = world.player;
+
+        double targetX = clampCam(p.pos.x - viewW / 2.0, Level.WIDTH, viewW);
+        double targetY = clampCam(p.pos.y - viewH / 2.0, Level.HEIGHT, viewH);
+
+        if (!camInit) {              // snap on the first frame, then ease
+            camX = targetX;
+            camY = targetY;
+            camInit = true;
+            return;
+        }
+        double k = Math.min(1.0, 10.0 * dt); // follow stiffness
+        camX += (targetX - camX) * k;
+        camY += (targetY - camY) * k;
+    }
+
+    /** Clamp a camera edge so the view stays inside the world (centering if smaller). */
+    private static double clampCam(double v, int worldSize, int viewSize) {
+        if (worldSize <= viewSize) {
+            return (worldSize - viewSize) / 2.0; // world narrower than view: center it
+        }
+        return Math.max(0, Math.min(worldSize - viewSize, v));
     }
 
     @Override
@@ -62,6 +99,11 @@ public final class GamePanel extends JPanel {
         super.paintComponent(g);
         Graphics2D g2 = (Graphics2D) g;
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+        // Shift the world under the camera so the player stays centered.
+        int cx = (int) Math.round(camX);
+        int cy = (int) Math.round(camY);
+        g2.translate(-cx, -cy);
 
         for (Block b : world.blocks) {
             drawBlock(g2, b);
@@ -90,6 +132,8 @@ public final class GamePanel extends JPanel {
         g2.setStroke(new BasicStroke(2f));
         g2.drawOval((int) (p.pos.x - p.radius), (int) (p.pos.y - p.radius), d, d);
 
+        // HUD is fixed to the screen, so undo the camera translate first.
+        g2.translate(cx, cy);
         String medium = p.onWaterfall ? "WATERFALL (climb)"
                 : p.inWater ? "WATER (fast)"
                 : (p.onGround ? "LAND (slow)" : "AIR (medium)");

@@ -14,7 +14,7 @@ public final class Main {
             frame.add(panel);
             frame.pack();
             frame.setLocationRelativeTo(null);
-            frame.setResizable(false);
+            frame.setResizable(true);
             frame.setVisible(true);
             panel.requestFocusInWindow();
         });

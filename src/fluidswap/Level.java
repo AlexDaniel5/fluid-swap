@@ -1,82 +1,81 @@
 package fluidswap;
 
 /**
- * A larger demo level: a chain of big floating <b>islands</b> at increasing
- * heights, a sea along the bottom, and four <b>waterfalls</b> that spill off the
- * island edges. Each waterfall is a vertical column the character can cling to
- * and climb slowly — that is how you ascend from one island to the next.
+ * A big open testing area (much larger than the viewport, so the camera scrolls
+ * to follow the character). It is a chain of chunky floating <b>islands</b>
+ * climbing up and to the right out of a wide <b>sea</b>, linked by
+ * <b>waterfalls</b> you cling to and climb. Every island has a <b>pond</b>
+ * carved into its top to swim in, and a few loose platforms are scattered about
+ * for jump testing.
  *
- * Every island is a chunky landmass with a <b>pond</b> carved into its top: two
- * raised land sides and a floor between them hold a small body of water you can
- * drop into and swim across.
- *
- * Intended route: start island → drop into the sea → climb waterfall A up to the
- * mid island (swim its pond to cross) → climb B up to the high island → climb D
- * up to the top rock. (Waterfall C is an alternate route from the sea up to the
- * right island.)
+ * Intended route: start island → drop into the sea → climb waterfall A, then B,
+ * C, D up the chain to the summit island. Waterfall E is an alternate sea climb
+ * up to the far-right island.
  */
 public final class Level {
 
-    public static final int WIDTH = 1800;
-    public static final int HEIGHT = 1000;
+    public static final int WIDTH = 4200;
+    public static final int HEIGHT = 1800;
 
     private Level() {}
 
     public static World build() {
-        Player player = new Player(130, 680, 20);
+        Player player = new Player(200, 1300, 20);
         World world = new World(player);
 
         // --- Boundaries ------------------------------------------------------
         world.addBlock(new Block(-40, 0, 40, HEIGHT, Block.Type.SOLID));   // left wall
         world.addBlock(new Block(WIDTH, 0, 40, HEIGHT, Block.Type.SOLID)); // right wall
-        world.addBlock(new Block(0, 960, WIDTH, 40, Block.Type.BLOTCHY));  // ocean floor
+        world.addBlock(new Block(0, 1760, WIDTH, 40, Block.Type.BLOTCHY)); // ocean floor
 
-        // The sea: a wide non-solid pool resting on the ocean floor.
-        world.addWater(new Water(0, 860, WIDTH, 100));
+        // The sea: a wide, deep non-solid pool resting on the ocean floor.
+        world.addWater(new Water(0, 1500, WIDTH, 300));
 
-        // --- Islands (low to high), each a basin holding a pond -------------
-        // Each island = left land + right land + a base block between them that
-        // forms both the island underside and the pond floor; water fills the
-        // notch on top. Walk the rims, drop in, swim, and climb back out.
-
-        // Start island (home; big pond to splash in).
-        world.addBlock(new Block(60, 740, 150, 200, Block.Type.CREST));    // left land
-        world.addBlock(new Block(370, 740, 170, 200, Block.Type.CREST));   // right land
-        world.addBlock(new Block(210, 810, 160, 130, Block.Type.BLOTCHY)); // base / pond floor
-        world.addWater(new Water(210, 740, 160, 70));                      // pond
-
-        // Mid island (reached by waterfall A; its pond must be swum to cross).
-        world.addBlock(new Block(620, 560, 110, 180, Block.Type.CREST));
-        world.addBlock(new Block(830, 560, 110, 180, Block.Type.CREST));
-        world.addBlock(new Block(730, 620, 100, 120, Block.Type.BLOTCHY));
-        world.addWater(new Water(730, 560, 100, 60));
-
-        // High island (reached by waterfall B).
-        world.addBlock(new Block(980, 360, 110, 180, Block.Type.CREST));
-        world.addBlock(new Block(1190, 360, 90, 180, Block.Type.CREST));
-        world.addBlock(new Block(1090, 420, 100, 120, Block.Type.BLOTCHY));
-        world.addWater(new Water(1090, 360, 100, 60));
-
-        // Right island (alternate route via waterfall C).
-        world.addBlock(new Block(1420, 680, 140, 200, Block.Type.CREST));
-        world.addBlock(new Block(1680, 680, 80, 200, Block.Type.CREST));
-        world.addBlock(new Block(1560, 740, 120, 140, Block.Type.BLOTCHY));
-        world.addWater(new Water(1560, 680, 120, 60));
-
-        // Summit rock (reached by waterfall D) and a floating rough ledge.
-        world.addBlock(new Block(1300, 160, 220, 60, Block.Type.SOLID));
-        world.addBlock(new Block(1500, 460, 220, 40, Block.Type.BLOTCHY));
+        // --- Islands (ascending chain, each a basin holding a pond) ---------
+        //      x     top  leftW pondW rightW thick pondDepth
+        island(world, 120, 1360, 180, 220, 180, 240, 90);  // start island  -> right 700
+        island(world, 820, 1120, 160, 200, 180, 220, 80);  // island 2      -> right 1360
+        island(world, 1380, 880, 160, 200, 180, 220, 80);  // island 3      -> right 1920
+        island(world, 1940, 640, 160, 220, 180, 220, 80);  // island 4      -> right 2500
+        island(world, 2520, 400, 180, 240, 200, 220, 90);  // summit island -> right 3140
+        island(world, 3400, 1150, 180, 240, 200, 250, 90); // far-right isle -> right 4020
 
         // --- Waterfalls (vertical climb routes) -----------------------------
-        // A: sea -> mid island (spills off the mid island's left edge).
-        world.addWaterfall(new Waterfall(560, 540, 60, 400));
-        // B: mid island -> high island.
-        world.addWaterfall(new Waterfall(920, 340, 60, 220));
-        // C: sea -> right island (alternate route).
-        world.addWaterfall(new Waterfall(1360, 660, 60, 300));
-        // D: high island -> summit rock.
-        world.addWaterfall(new Waterfall(1240, 160, 60, 200));
+        waterfall(world, 760, 1100, 1540);  // A: sea      -> island 2
+        waterfall(world, 1320, 860, 1120);  // B: island 2 -> island 3
+        waterfall(world, 1880, 620, 880);   // C: island 3 -> island 4
+        waterfall(world, 2460, 380, 640);   // D: island 4 -> summit island
+        waterfall(world, 3340, 1130, 1540); // E: sea      -> far-right island
+
+        // --- Loose platforms for jump testing -------------------------------
+        world.addBlock(new Block(500, 1150, 160, 30, Block.Type.SOLID));
+        world.addBlock(new Block(1000, 1480, 180, 30, Block.Type.SOLID));
+        world.addBlock(new Block(2700, 1300, 220, 30, Block.Type.CREST));
+        world.addBlock(new Block(3600, 800, 200, 30, Block.Type.BLOTCHY));
 
         return world;
+    }
+
+    /**
+     * Builds a basin island: a left land block and a right land block with a
+     * base between them that forms both the island underside and the pond
+     * floor; water fills the notch on top. Walk the rims, drop in, swim, climb
+     * back out. Returns the island's right edge x.
+     */
+    private static double island(World w, double x, double top, double leftW,
+                                 double pondW, double rightW, double thickness,
+                                 double pondDepth) {
+        double pondX = x + leftW;
+        double floorTop = top + pondDepth;
+        w.addBlock(new Block(x, top, leftW, thickness, Block.Type.CREST));        // left land
+        w.addBlock(new Block(pondX + pondW, top, rightW, thickness, Block.Type.CREST)); // right land
+        w.addBlock(new Block(pondX, floorTop, pondW, thickness - pondDepth, Block.Type.BLOTCHY)); // base / pond floor
+        w.addWater(new Water(pondX, top, pondW, pondDepth));                      // pond
+        return x + leftW + pondW + rightW;
+    }
+
+    /** A 60px-wide waterfall column spanning {@code top..bottom} at {@code x}. */
+    private static void waterfall(World w, double x, double top, double bottom) {
+        w.addWaterfall(new Waterfall(x, top, 60, bottom - top));
     }
 }
