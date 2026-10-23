@@ -22,7 +22,9 @@ public final class CollisionTest {
         testSpeedByMedium();
         testWaterDetection();
         testTurnAroundTimeIsSpeedIndependent();
-        testWaterJumpFasterThanLand();
+        testWaterSwimUpIsSustainedAscent();
+        testWaterVerticalReversalIsGradual();
+        testWaterExitJumpBurst();
         testWaterfallDetection();
         testWaterfallClimbUp();
         testWaterfallSlipIsSlow();
@@ -203,27 +205,87 @@ public final class CollisionTest {
         return frames;
     }
 
-    private static void testWaterJumpFasterThanLand() {
-        // Jumping out of water should launch faster than a land jump.
+    private static void testWaterSwimUpIsSustainedAscent() {
+        // Holding up in water eases into a steady ascent (not an impulse that
+        // decays): once ramped up, the upward velocity holds at the swim-up
+        // speed for as long as it is held.
+        double dt = 1.0 / 240.0;
+        Player swim = new Player(100, 300, 20);
+        World sw = new World(swim);
+        sw.addWater(new Water(-1000, 0, 4000, 4000)); // deep, fully submerged
+        sw.climbUp = true;                             // hold "up"
+
+        double startY = swim.pos.y;
+        for (int i = 0; i < 60; i++) sw.step(dt);      // let the ascent ramp in
+        double v1 = swim.vel.y;      // upward is negative
+        for (int i = 0; i < 60; i++) sw.step(dt);
+        double vLater = swim.vel.y;
+
+        check("swimming up ascends (upward velocity, got " + round(v1) + ")", v1 < 0);
+        check("ascent settles at the steady swim-up speed (got " + round(-v1) + ")",
+                Math.abs(-v1 - World.WATER_SWIM_UP_SPEED) < 0.01);
+        check("ascent is sustained, not a decaying burst (earlier=" + round(v1)
+                + ", later=" + round(vLater) + ")", Math.abs(vLater - v1) < 0.01);
+        check("ascent actually carries the swimmer up", swim.pos.y < startY - 50);
+
+        // A land jump is still a single impulse at ~JUMP_SPEED.
         Player land = new Player(100, 100, 20);
         World lw = new World(land);
         land.onGround = true;
         lw.jumpRequested = true;
-        lw.step(1.0 / 240.0);
-        double landJumpSpeed = -land.vel.y; // upward is negative
-
-        Player swim = new Player(100, 300, 20);
-        World sw = new World(swim);
-        sw.addWater(new Water(0, 200, 400, 400)); // player submerged
-        sw.jumpRequested = true;
-        sw.step(1.0 / 240.0);
-        double waterJumpSpeed = -swim.vel.y;
-
-        check("water jump launches faster than land jump (water=" + round(waterJumpSpeed)
-                + ", land=" + round(landJumpSpeed) + ")", waterJumpSpeed > landJumpSpeed);
-        // Land jump is essentially JUMP_SPEED (minus one frame of gravity).
-        check("land jump speed unchanged (~JUMP_SPEED, got " + round(landJumpSpeed) + ")",
+        lw.step(dt);
+        double landJumpSpeed = -land.vel.y;
+        check("land jump unchanged (~JUMP_SPEED, got " + round(landJumpSpeed) + ")",
                 Math.abs(landJumpSpeed - World.JUMP_SPEED) < 10);
+    }
+
+    private static void testWaterVerticalReversalIsGradual() {
+        // Switching from ascending to diving in water is a gradual turn, not an
+        // instant snap, and reversing from a higher speed takes longer.
+        int fast = framesToReverseVertical(120); // ramp to full ascent first
+        int slow = framesToReverseVertical(2);    // reverse from a low speed
+
+        check("vertical reversal in water is not instant (took " + fast + "f)", fast > 1);
+        check("reversing a faster ascent takes longer (fast=" + fast + "f, slow=" + slow + "f)",
+                fast > slow);
+    }
+
+    /** Ascend for {@code upFrames}, then dive; count frames for vy to cross zero. */
+    private static int framesToReverseVertical(int upFrames) {
+        double dt = 1.0 / 240.0;
+        Player p = new Player(100, 4000, 20);
+        World w = new World(p);
+        w.addWater(new Water(-5000, 0, 10000, 8000)); // very deep, always submerged
+        w.climbUp = true;
+        for (int i = 0; i < upFrames; i++) w.step(dt);
+        w.climbUp = false;
+        w.climbDown = true; // now dive
+        int frames = 0;
+        while (p.vel.y < 0 && frames < 2000) { w.step(dt); frames++; }
+        return frames;
+    }
+
+    private static void testWaterExitJumpBurst() {
+        // Holding jump while breaking the surface launches out with a strong
+        // burst — much faster than the steady swim-up or a standing land jump.
+        double dt = 1.0 / 240.0;
+        Player p = new Player(100, 230, 20);
+        World w = new World(p);
+        w.addWater(new Water(-1000, 200, 4000, 2000)); // surface at y=200, player just below
+        double peakUp = 0;        // most-negative (fastest upward) vel.y seen
+        boolean leftWater = false;
+        for (int i = 0; i < 240; i++) {
+            w.climbUp = true;       // swimming up
+            w.jumpRequested = true; // jump held
+            w.step(dt);
+            peakUp = Math.min(peakUp, p.vel.y);
+            if (!p.inWater) leftWater = true;
+        }
+        check("player breaks the surface", leftWater);
+        check("exit jump bursts faster than a land jump (peak up=" + round(-peakUp) + ")",
+                -peakUp > World.JUMP_SPEED);
+        check("exit burst is the strong WATER_EXIT_JUMP_SPEED (got " + round(-peakUp) + ")",
+                Math.abs(-peakUp - World.WATER_EXIT_JUMP_SPEED) < 15);
     }
 
     private static void testWaterfallDetection() {

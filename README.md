@@ -13,8 +13,13 @@ The map also has **water** regions (non-solid). Movement speed depends on the
 medium the character is in:
 - **Land** (grounded) — slowest (`LAND_SPEED = 140`)
 - **Air** — medium (`AIR_SPEED = 240`)
-- **Water** — fastest (`WATER_SPEED = 420`); gravity is reduced and Space lets
-  you swim up.
+- **Water** — fastest (`WATER_SPEED = 420`); gravity is reduced and buoyant.
+  Holding up is a *sustained* ascent (`WATER_SWIM_UP_SPEED = 380`), holding down
+  a dive; with no input you sink gently. The vertical velocity eases toward its
+  target at a fixed `WATER_SWIM_ACCEL = 2000`, so reversing (ascend ⇄ dive) is a
+  gradual turn that takes longer the faster you were going — no snap. Breaking
+  the surface while holding jump launches you out with a strong burst
+  (`WATER_EXIT_JUMP_SPEED = 780`).
 - **Waterfall** — a vertical column of falling water you can **cling to and
   climb slowly** (`CLIMB_SPEED = 90`, up *or* down). Gravity is ignored while
   clinging; with no vertical input you slip down gently (`WATERFALL_SLIP = 45`).

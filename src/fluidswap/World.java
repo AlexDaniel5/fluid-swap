@@ -23,10 +23,19 @@ import java.util.List;
 public final class World {
 
     public static final double GRAVITY = 1800.0;      // px / s^2
-    public static final double JUMP_SPEED = 720.0;    // px / s (off land)
-    // Leaping out of water is springier than a standing land jump: the water
-    // launches the character up faster.
-    public static final double WATER_JUMP_SCALE = 1.4;
+    public static final double JUMP_SPEED = 720.0;    // px / s (off land, one impulse)
+    // In water there is no jump impulse: holding up is a sustained ascent (swim
+    // up) and holding down a sustained dive. Steady speeds, not a sudden burst.
+    public static final double WATER_SWIM_UP_SPEED = 380.0;
+    public static final double WATER_SWIM_DOWN_SPEED = 240.0;
+    // How fast the vertical swim velocity eases toward its target (px / s^2).
+    // Because this is a fixed acceleration, reversing direction (ascend->dive)
+    // takes longer the faster you were already moving, rather than snapping.
+    public static final double WATER_SWIM_ACCEL = 2000.0;
+    // Breaking the surface while holding jump launches the character out of the
+    // water with a burst — a solid pop, a bit stronger than a standing land
+    // jump, but not a rocket (so holding up doesn't fling you across the map).
+    public static final double WATER_EXIT_JUMP_SPEED = 780.0;
 
     // Horizontal movement speeds by medium (px / s).
     public static final double LAND_SPEED = 140.0;    // slowest
@@ -101,6 +110,7 @@ public final class World {
         // Determine medium from current position (water + previous grounded state).
         player.inWater = overlapsAnyWater();
         player.onWaterfall = overlapsAnyWaterfall();
+        boolean enteredStepInWater = player.inWater;
 
         // Ease horizontal velocity toward the intended speed for this medium.
         player.vel.x = steerHorizontal(player.vel.x, moveDir * activeMoveSpeed(), dt);
@@ -117,21 +127,29 @@ public final class World {
             }
             player.onGround = false;
             jumpRequested = false;
+        } else if (player.inWater) {
+            // Swimming. Holding up/down eases the vertical velocity toward a
+            // target ascent/dive speed at a fixed acceleration, so reversing
+            // (ascend -> dive) is a gradual turn that takes longer the faster
+            // you were going — no sudden snap. With no input the body sinks
+            // gently under reduced, damped gravity.
+            if (climbUp && !climbDown) {
+                player.vel.y = approach(player.vel.y, -WATER_SWIM_UP_SPEED, WATER_SWIM_ACCEL * dt);
+            } else if (climbDown && !climbUp) {
+                player.vel.y = approach(player.vel.y, WATER_SWIM_DOWN_SPEED, WATER_SWIM_ACCEL * dt);
+            } else {
+                player.vel.y += GRAVITY * WATER_GRAVITY_SCALE * dt;
+                player.vel.y *= Math.max(0, 1.0 - WATER_DRAG * dt);
+            }
+            jumpRequested = false;
         } else {
-            // Jump / swim-up when grounded or in water.
-            if (jumpRequested && (player.onGround || player.inWater)) {
-                player.vel.y = -JUMP_SPEED * (player.inWater ? WATER_JUMP_SCALE : 1.0);
+            // On land/air: a jump is a single impulse off the ground.
+            if (jumpRequested && player.onGround) {
+                player.vel.y = -JUMP_SPEED;
                 player.onGround = false;
             }
             jumpRequested = false;
-
-            // Gravity (reduced in water) and water drag.
-            double gravity = GRAVITY * (player.inWater ? WATER_GRAVITY_SCALE : 1.0);
-            player.vel.y += gravity * dt;
-            if (player.inWater) {
-                double damp = Math.max(0, 1.0 - WATER_DRAG * dt);
-                player.vel.y *= damp;
-            }
+            player.vel.y += GRAVITY * dt;
         }
 
         // Integrate.
@@ -162,6 +180,13 @@ public final class World {
         // Re-evaluate region state after moving so it is accurate for rendering.
         player.inWater = overlapsAnyWater();
         player.onWaterfall = overlapsAnyWaterfall();
+
+        // If this step carried the character up and out through the surface
+        // while jump was held, launch them with a strong exit burst.
+        if (enteredStepInWater && !player.inWater && !player.onWaterfall && climbUp) {
+            player.vel.y = -WATER_EXIT_JUMP_SPEED;
+            player.onGround = false;
+        }
     }
 
     /**
@@ -190,12 +215,16 @@ public final class World {
             rate = accel;                    // speeding up in the held direction
         }
 
-        double maxChange = rate * dt;
-        double diff = target - vx;
-        if (Math.abs(diff) <= maxChange) {
+        return approach(vx, target, rate * dt);
+    }
+
+    /** Move {@code value} toward {@code target} by at most {@code maxDelta}. */
+    private static double approach(double value, double target, double maxDelta) {
+        double diff = target - value;
+        if (Math.abs(diff) <= maxDelta) {
             return target;
         }
-        return vx + Math.signum(diff) * maxChange;
+        return value + Math.signum(diff) * maxDelta;
     }
 
     private boolean overlapsAnyWater() {
