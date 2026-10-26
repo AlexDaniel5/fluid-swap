@@ -78,6 +78,9 @@ public final class World {
     public final List<Block> blocks = new ArrayList<>();
     public final List<Water> waters = new ArrayList<>();
     public final List<Waterfall> waterfalls = new ArrayList<>();
+    public final List<Finish> finishes = new ArrayList<>();
+    public final List<Hazard> hazards = new ArrayList<>();
+    public final List<Platform> platforms = new ArrayList<>(); // one-way (land from above)
 
     // Input intent, set by the controller each frame.
     public double moveDir = 0;       // -1 left, +1 right, 0 none
@@ -85,13 +88,35 @@ public final class World {
     public boolean climbUp = false;  // up/jump key held (climb a waterfall)
     public boolean climbDown = false; // down key held (descend a waterfall)
 
+    // Level completion. `finished` latches true the moment the player reaches a
+    // finish region and never clears, so the goal can't be re-triggered. While
+    // finished the player is locked into a gentle victory bob and ignores input.
+    // `finishElapsed` is seconds since completion, driving the end sequence.
+    public boolean finished = false;
+    public double finishElapsed = 0;
+    private double finishAnchorX, finishAnchorY;
+
+    // Death + respawn. `dead` latches when the player enters a hazard and plays
+    // a short death sequence (DEATH_DURATION) before respawning at the spawn
+    // point. Input is ignored while dead. `deathX/deathY` anchor the effect.
+    public static final double DEATH_DURATION = 1.0; // seconds of death effect
+    public boolean dead = false;
+    public double deathElapsed = 0;
+    public double deathX, deathY;
+    private final double spawnX, spawnY;
+
     public World(Player player) {
         this.player = player;
+        this.spawnX = player.pos.x;
+        this.spawnY = player.pos.y;
     }
 
     public void addBlock(Block b) { blocks.add(b); }
     public void addWater(Water w) { waters.add(w); }
     public void addWaterfall(Waterfall f) { waterfalls.add(f); }
+    public void addFinish(Finish g) { finishes.add(g); }
+    public void addHazard(Hazard h) { hazards.add(h); }
+    public void addPlatform(Platform pf) { platforms.add(pf); }
 
     /**
      * The active horizontal speed given the character's current medium. A
@@ -107,6 +132,35 @@ public final class World {
 
     /** Advance the simulation by {@code dt} seconds. */
     public void step(double dt) {
+        if (finished) {
+            // Victory: input is ignored and the player holds still at the flag,
+            // so the level can't be disturbed or the goal re-triggered.
+            finishElapsed += dt;
+            moveDir = 0;
+            jumpRequested = climbUp = climbDown = false;
+            player.vel.x = player.vel.y = 0;
+            player.pos.x = finishAnchorX;
+            player.pos.y = finishAnchorY;
+            player.inWater = overlapsAnyWater();
+            player.onWaterfall = false;
+            return;
+        }
+
+        if (dead) {
+            // Death sequence: frozen at the death spot, input ignored, then
+            // respawn at the start once the effect has played out.
+            deathElapsed += dt;
+            moveDir = 0;
+            jumpRequested = climbUp = climbDown = false;
+            player.vel.x = player.vel.y = 0;
+            player.pos.x = deathX;
+            player.pos.y = deathY;
+            if (deathElapsed >= DEATH_DURATION) {
+                respawn();
+            }
+            return;
+        }
+
         // Determine medium from current position (water + previous grounded state).
         player.inWater = overlapsAnyWater();
         player.onWaterfall = overlapsAnyWaterfall();
@@ -152,7 +206,8 @@ public final class World {
             player.vel.y += GRAVITY * dt;
         }
 
-        // Integrate.
+        // Integrate (remembering where the player's feet were, for one-way platforms).
+        double prevBottom = player.bottom();
         player.pos.add(player.vel.x * dt, player.vel.y * dt);
 
         // Resolve collisions against all terrain.
@@ -177,6 +232,19 @@ public final class World {
             }
         }
 
+        // One-way platforms: a descending player that was above the line last
+        // frame lands on top; a rising player passes straight up through it.
+        for (Platform pf : platforms) {
+            if (player.vel.y >= 0
+                    && player.right() > pf.left() && player.left() < pf.right()
+                    && prevBottom <= pf.top() + 1
+                    && player.bottom() >= pf.top()) {
+                player.pos.y = pf.top() - player.radius;
+                player.vel.y = 0;
+                player.onGround = true;
+            }
+        }
+
         // Re-evaluate region state after moving so it is accurate for rendering.
         player.inWater = overlapsAnyWater();
         player.onWaterfall = overlapsAnyWaterfall();
@@ -187,6 +255,52 @@ public final class World {
             player.vel.y = -WATER_EXIT_JUMP_SPEED;
             player.onGround = false;
         }
+
+        // Reaching the goal completes the level (latched; triggers once) — but
+        // only once the player has actually landed on the finish platform, so
+        // "LEVEL COMPLETE!" waits until they hit the ground, not mid-jump.
+        // Falling into a hazard kills the player (checked only if not winning).
+        if (player.onGround && overlapsAnyFinish()) {
+            finished = true;
+            finishElapsed = 0;
+            finishAnchorX = player.pos.x;
+            finishAnchorY = player.pos.y;
+        } else if (overlapsAnyHazard()) {
+            dead = true;
+            deathElapsed = 0;
+            deathX = player.pos.x;
+            deathY = player.pos.y;
+        }
+    }
+
+    /** Return the player to the spawn point with cleared motion/medium state. */
+    private void respawn() {
+        dead = false;
+        deathElapsed = 0;
+        player.pos.x = spawnX;
+        player.pos.y = spawnY;
+        player.vel.x = player.vel.y = 0;
+        player.onGround = false;
+        player.inWater = false;
+        player.onWaterfall = false;
+    }
+
+    private boolean overlapsAnyFinish() {
+        for (Finish g : finishes) {
+            if (Collision.intersects(player, g)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean overlapsAnyHazard() {
+        for (Hazard h : hazards) {
+            if (Collision.intersects(player, h)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

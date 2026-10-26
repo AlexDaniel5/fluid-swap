@@ -44,6 +44,18 @@ public final class Collision {
             && p.bottom() > f.top() && p.top() < f.bottom();
     }
 
+    /** @return true if the player's box overlaps the finish (goal) region. */
+    public static boolean intersects(Player p, Finish g) {
+        return p.right() > g.left() && p.left() < g.right()
+            && p.bottom() > g.top() && p.top() < g.bottom();
+    }
+
+    /** @return true if the player's box overlaps a lethal hazard region. */
+    public static boolean intersects(Player p, Hazard h) {
+        return p.right() > h.left() && p.left() < h.right()
+            && p.bottom() > h.top() && p.top() < h.bottom();
+    }
+
     /**
      * Separate the player box from the block using the minimum translation
      * vector: push out along whichever axis has the smaller penetration.

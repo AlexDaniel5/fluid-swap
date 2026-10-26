@@ -25,6 +25,14 @@ public final class CollisionTest {
         testWaterSwimUpIsSustainedAscent();
         testWaterVerticalReversalIsGradual();
         testWaterExitJumpBurst();
+        testReachingFinishCompletesLevel();
+        testFinishNeedsGround();
+        testFinishNotTriggeredWhenAway();
+        testHazardKillsAndRespawns();
+        testNoDeathOnSafeGround();
+        testSpawnPlatformIsSafe();
+        testOneWayPlatformLandsFromAbove();
+        testOneWayPlatformPassesFromBelow();
         testWaterfallDetection();
         testWaterfallClimbUp();
         testWaterfallSlipIsSlow();
@@ -286,6 +294,133 @@ public final class CollisionTest {
                 -peakUp > World.JUMP_SPEED);
         check("exit burst is the strong WATER_EXIT_JUMP_SPEED (got " + round(-peakUp) + ")",
                 Math.abs(-peakUp - World.WATER_EXIT_JUMP_SPEED) < 15);
+    }
+
+    private static void testReachingFinishCompletesLevel() {
+        double dt = 1.0 / 240.0;
+        Player p = new Player(100, 100, 20);
+        World w = new World(p);
+        w.addBlock(new Block(0, 300, 400, 60, Block.Type.GRASS)); // finish platform
+        w.addFinish(new Finish(0, 240, 400, 120));                // over its standing band
+        check("level not finished before landing", !w.finished);
+
+        simulate(w, 2.0); // fall and land on the finish platform
+        check("landing on the finish completes the level", w.finished);
+
+        // Latches and locks the player: driving input does nothing afterward.
+        double lockedX = p.pos.x;
+        w.moveDir = 1;
+        w.jumpRequested = true;
+        for (int i = 0; i < 240; i++) w.step(dt);
+        check("completion latches (stays finished)", w.finished);
+        check("player is locked after finishing (no horizontal travel, x="
+                + round(p.pos.x) + ")", Math.abs(p.pos.x - lockedX) < 0.5);
+        check("finish timer advances for the end sequence (" + round(w.finishElapsed) + "s)",
+                w.finishElapsed > 0.9);
+    }
+
+    private static void testFinishNeedsGround() {
+        // Overlapping the finish mid-air (not grounded) must NOT complete it.
+        double dt = 1.0 / 240.0;
+        Player p = new Player(100, 100, 20);
+        World w = new World(p);
+        w.addFinish(new Finish(0, 0, 400, 400)); // player is inside it but falling
+        for (int i = 0; i < 10; i++) w.step(dt);
+        check("finish does not trigger while airborne in the region",
+                !w.finished && !p.onGround);
+    }
+
+    private static void testFinishNotTriggeredWhenAway() {
+        Player p = new Player(100, 100, 20);
+        World w = new World(p);
+        w.addBlock(new Block(0, 140, 400, 60, Block.Type.CREST)); // floor
+        w.addFinish(new Finish(3000, 3000, 100, 100));            // far away
+        p.onGround = true;
+        for (int i = 0; i < 120; i++) w.step(1.0 / 240.0);
+        check("goal not triggered when the player is nowhere near it", !w.finished);
+    }
+
+    private static void testHazardKillsAndRespawns() {
+        double dt = 1.0 / 240.0;
+        Player p = new Player(500, 100, 20);   // spawn point captured here
+        World w = new World(p);
+        w.addBlock(new Block(400, 180, 200, 60, Block.Type.CREST)); // ground under spawn
+        w.addHazard(new Hazard(0, 1000, 2000, 200));                // deadly depths, far below
+
+        for (int i = 0; i < 180; i++) w.step(dt); // settle on the spawn ground
+        double restY = p.pos.y;
+        check("not dead during normal play", !w.dead);
+
+        // Fall into the hazard.
+        p.pos.x = 800;
+        p.pos.y = 1100;
+        w.step(dt);
+        check("entering a hazard kills the player", w.dead);
+
+        // Input is ignored while dead (can't crawl out).
+        w.moveDir = 1;
+        w.jumpRequested = true;
+        for (int i = 0; i < (int) (World.DEATH_DURATION * 240) - 5; i++) w.step(dt);
+        check("still dead during the death sequence", w.dead);
+
+        // After the sequence, respawn at the spawn point.
+        for (int i = 0; i < 20; i++) w.step(dt);
+        check("respawns (death cleared)", !w.dead);
+        check("respawns at the spawn x (got " + round(p.pos.x) + ")", Math.abs(p.pos.x - 500) < 1.0);
+
+        // And lands safely back on the spawn ground.
+        for (int i = 0; i < 240; i++) w.step(dt);
+        check("respawn settles on safe ground (y≈" + round(restY) + ", got " + round(p.pos.y) + ")",
+                p.onGround && Math.abs(p.pos.y - restY) < 2.0 && !w.dead);
+    }
+
+    private static void testNoDeathOnSafeGround() {
+        Player p = new Player(100, 100, 20);
+        World w = new World(p);
+        w.addBlock(new Block(0, 140, 400, 60, Block.Type.CREST));
+        w.addHazard(new Hazard(2000, 2000, 100, 100)); // far away
+        p.onGround = true;
+        for (int i = 0; i < 240; i++) w.step(1.0 / 240.0);
+        check("no death when standing safely away from hazards", !w.dead);
+    }
+
+    private static void testSpawnPlatformIsSafe() {
+        // In the real level the player should settle on the spawn square's
+        // one-way floor and not fall into the pit; goal/pit/platforms exist.
+        World w = Level.build();
+        Player p = w.player;
+        for (int i = 0; i < 240 * 3; i++) w.step(1.0 / 240.0);
+        check("spawn settles on the one-way floor (grounded)", p.onGround);
+        check("player does not die on the spawn platform", !w.dead);
+        check("spawn floats in water", p.inWater);
+        check("level has a finish, a pit hazard and a one-way platform",
+                !w.finishes.isEmpty() && !w.hazards.isEmpty() && !w.platforms.isEmpty());
+    }
+
+    private static void testOneWayPlatformLandsFromAbove() {
+        double dt = 1.0 / 240.0;
+        Player p = new Player(100, 100, 20); // starts above the line
+        World w = new World(p);
+        w.addPlatform(new Platform(50, 300, 200)); // line at y=300, x[50..250]
+        simulate(w, 2.0); // fall onto it
+        check("a descending player lands on the one-way line (bottom≈300, got "
+                + round(p.pos.y + p.radius) + ")", Math.abs((p.pos.y + p.radius) - 300) < 1.0);
+        check("resting on the one-way line marks onGround", p.onGround);
+        check("did not tunnel through the one-way line", p.pos.y + p.radius <= 300.5);
+    }
+
+    private static void testOneWayPlatformPassesFromBelow() {
+        double dt = 1.0 / 240.0;
+        Player p = new Player(100, 360, 20); // starts below the line
+        World w = new World(p);
+        w.addPlatform(new Platform(50, 300, 200)); // line at y=300
+        p.vel.y = -600; // launched upward
+        boolean roseAbove = false;
+        for (int i = 0; i < 60; i++) {
+            w.step(dt);
+            if (p.pos.y + p.radius < 300) { roseAbove = true; break; }
+        }
+        check("a rising player passes up through the one-way line", roseAbove);
     }
 
     private static void testWaterfallDetection() {

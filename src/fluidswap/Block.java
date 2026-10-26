@@ -14,7 +14,9 @@ public final class Block {
         /** Ridged top edge ("crest") — think a hill cap or platform lip. */
         CREST,
         /** Irregular, speckled fill ("blotchy") — rough ground. */
-        BLOTCHY
+        BLOTCHY,
+        /** Dirt body with a grassy top and blades — the main platform terrain. */
+        GRASS
     }
 
     public final double x;
