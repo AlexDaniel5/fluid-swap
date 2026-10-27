@@ -17,7 +17,10 @@ public final class Level {
     private Level() {}
 
     public static World build() {
-        Player player = new Player(540, 1200, 20);
+        // Spawn standing on the one-way platform that runs through the middle
+        // of the spawn square (square center is (540, 1080); the platform top is
+        // at 1100 so the radius-20 player rests exactly on it).
+        Player player = new Player(540, 1080, 20);
         World world = new World(player);
 
         // Side walls + bottomless pit below everything.
@@ -25,10 +28,14 @@ public final class Level {
         world.addBlock(new Block(WIDTH, 0, 40, HEIGHT, Block.Type.SOLID));
         world.addHazard(new Hazard(0, 1420, WIDTH, HEIGHT - 1420));
 
-        // Square 1 (spawn) and Square 2 — same height, a leap apart. Each rests
-        // on a one-way line floor so you float instead of falling into the pit.
-        floatingSquare(world, 300, 900, 480, 360); // spawn: x[300..780]
-        floatingSquare(world, 940, 900, 480, 360); // leap target (~160px gap): x[940..1420]
+        // Square 1 (spawn): the one-way platform runs through its MIDDLE, so you
+        // spawn standing on the bar in the centre of the water (full width, so
+        // you can't sink past it — you progress by swimming up and out).
+        world.addWater(new Water(300, 900, 480, 360));    // x[300..780], y[900..1260]
+        world.addPlatform(new Platform(465, 1100, 150));  // mid-square line
+
+        // Square 2 — the leap target (~160px gap); its one-way line is the floor.
+        floatingSquare(world, 940, 900, 480, 360);        // x[940..1420]
 
         // The single waterfall: climb it from square 2 up into square 3. Its
         // column spans exactly from square 3's left edge (1360) to square 2's
