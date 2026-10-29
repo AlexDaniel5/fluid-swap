@@ -25,6 +25,8 @@ public final class CollisionTest {
         testWaterSwimUpIsSustainedAscent();
         testWaterVerticalReversalIsGradual();
         testWaterExitJumpBurst();
+        testWaterExitEventAtSurface();
+        testWaterExitEventOutOfSide();
         testReachingFinishCompletesLevel();
         testFinishNeedsGround();
         testFinishNotTriggeredWhenAway();
@@ -294,6 +296,46 @@ public final class CollisionTest {
                 -peakUp > World.JUMP_SPEED);
         check("exit burst is the strong WATER_EXIT_JUMP_SPEED (got " + round(-peakUp) + ")",
                 Math.abs(-peakUp - World.WATER_EXIT_JUMP_SPEED) < 15);
+    }
+
+    private static void testWaterExitEventAtSurface() {
+        // Leaving water records one exit event, placed on the surface line,
+        // so the view can play a splash there.
+        double dt = 1.0 / 240.0;
+        Player p = new Player(100, 230, 20);
+        World w = new World(p);
+        w.addWater(new Water(-1000, 200, 4000, 2000)); // surface at y=200
+        check("no water exit before leaving", w.waterExits == 0);
+        for (int i = 0; i < 240 && w.waterExits == 0; i++) {
+            w.climbUp = true;
+            w.step(dt);
+        }
+        check("leaving the water records one exit (got " + w.waterExits + ")", w.waterExits == 1);
+        check("exit splash sits on the surface (y=" + round(w.waterExitY) + ")",
+                Math.abs(w.waterExitY - 200) < 0.5);
+        check("exit records upward velocity (vy=" + round(w.waterExitVY) + ")", w.waterExitVY < 0);
+        check("surface exit normal points up", w.waterExitNX == 0 && w.waterExitNY == -1);
+    }
+
+    private static void testWaterExitEventOutOfSide() {
+        // Swimming out the right wall (even while also rising) splashes on that
+        // wall, not up on the surface.
+        double dt = 1.0 / 240.0;
+        Player p = new Player(360, 300, 20);
+        World w = new World(p);
+        w.addWater(new Water(0, 200, 400, 400)); // right wall at x=400, surface y=200
+        for (int i = 0; i < 240 && w.waterExits == 0; i++) {
+            w.moveDir = 1;
+            w.climbUp = true;
+            w.step(dt);
+        }
+        check("swimming out the side records an exit", w.waterExits == 1);
+        check("side exit normal points right (n=" + w.waterExitNX + "," + w.waterExitNY + ")",
+                w.waterExitNX == 1 && w.waterExitNY == 0);
+        check("side splash sits on the wall (x=" + round(w.waterExitX) + ")",
+                Math.abs(w.waterExitX - 400) < 0.5);
+        check("side splash is below the surface (y=" + round(w.waterExitY) + ")",
+                w.waterExitY > 200 && w.waterExitY < 600);
     }
 
     private static void testReachingFinishCompletesLevel() {

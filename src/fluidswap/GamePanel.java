@@ -12,6 +12,9 @@ import java.awt.Polygon;
 import java.awt.RenderingHints;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Random;
 import javax.swing.JPanel;
 import javax.swing.Timer;
@@ -36,6 +39,20 @@ public final class GamePanel extends JPanel {
     private static final double RESPAWN_FADE = 0.4;
     private boolean prevDead;
     private double respawnFade;
+
+    // Water-exit splash (view-layer only): droplets thrown up from the surface
+    // and a short dripping trail shed by the player while they're still wet.
+    private static final double SPLASH_GRAVITY = 1400.0; // px / s^2 on droplets
+    private static final double DRIP_DURATION = 0.7;     // seconds of dripping
+    private static final double SPLASH_COOLDOWN = 0.15;  // ignore surface jitter
+    private final List<Droplet> droplets = new ArrayList<>();
+    private final Random fx = new Random();
+    private int seenWaterExits;
+    private double dripTime, dripAccum, splashCooldown;
+
+    private static final class Droplet {
+        double x, y, vx, vy, life, maxLife, size;
+    }
 
     public GamePanel(World world) {
         this.world = world;
@@ -78,9 +95,111 @@ public final class GamePanel extends JPanel {
             respawnFade = Math.max(0, respawnFade - dt);
         }
         prevDead = world.dead;
+        updateSplash(dt);
         updateCamera(dt);
         frame++;
         repaint();
+    }
+
+    /** Spawn a splash when the player leaves water, then advance all particles. */
+    private void updateSplash(double dt) {
+        splashCooldown = Math.max(0, splashCooldown - dt);
+        if (world.waterExits != seenWaterExits) {
+            seenWaterExits = world.waterExits;
+            if (splashCooldown == 0) {
+                spawnSplash();
+                splashCooldown = SPLASH_COOLDOWN;
+            }
+        }
+
+        // While still wet, the player sheds the odd drip as they fly.
+        Player p = world.player;
+        if (dripTime > 0) {
+            dripTime = Math.max(0, dripTime - dt);
+            if (p.inWater || world.dead) {
+                dripTime = 0;
+            } else {
+                dripAccum += dt * 30 * (dripTime / DRIP_DURATION); // tapers off
+                while (dripAccum >= 1) {
+                    dripAccum -= 1;
+                    addDroplet(p.pos.x + (fx.nextDouble() - 0.5) * p.radius * 1.6,
+                            p.pos.y + p.radius * 0.6,
+                            p.vel.x * 0.3 + (fx.nextDouble() - 0.5) * 40,
+                            p.vel.y * 0.2 + 40,
+                            0.35 + fx.nextDouble() * 0.25, 2 + fx.nextDouble() * 2);
+                }
+            }
+        }
+
+        for (Iterator<Droplet> it = droplets.iterator(); it.hasNext(); ) {
+            Droplet d = it.next();
+            d.life -= dt;
+            if (d.life <= 0) {
+                it.remove();
+                continue;
+            }
+            d.vy += SPLASH_GRAVITY * dt;
+            d.x += d.vx * dt;
+            d.y += d.vy * dt;
+        }
+    }
+
+    /**
+     * Burst of droplets thrown out of whichever edge the player left through,
+     * scaled by how hard they were moving out of it.
+     */
+    private void spawnSplash() {
+        double x = world.waterExitX, y = world.waterExitY;
+        double nx = world.waterExitNX, ny = world.waterExitNY; // outward normal
+        double tx = -ny, ty = nx;                                // along the edge
+        double vx = world.waterExitVX, vy = world.waterExitVY;
+
+        // Power from speed out through the edge: the surface is judged against
+        // the exit burst, a side against top swim speed.
+        double outSpeed = Math.max(0, vx * nx + vy * ny);
+        double maxOut = ny != 0 ? World.WATER_EXIT_JUMP_SPEED : World.WATER_SPEED;
+        double power = Math.min(1.0, outSpeed / maxOut);
+        double strength = 0.4 + 0.6 * power;
+        double r = world.player.radius;
+        double along = vx * tx + vy * ty; // carried along the edge
+
+        int count = (int) (10 + 22 * strength);
+        double base = Math.atan2(ny, nx);
+        for (int i = 0; i < count; i++) {
+            // Fan outward, mostly within ±60° of the edge's normal.
+            double ang = base + (fx.nextDouble() - 0.5) * (Math.PI * 2 / 3);
+            double speed = (180 + fx.nextDouble() * 320) * strength;
+            double off = (fx.nextDouble() - 0.5) * r * 2; // spread along the edge
+            addDroplet(x + tx * off, y + ty * off,
+                    Math.cos(ang) * speed + tx * along * 0.35,
+                    Math.sin(ang) * speed + ty * along * 0.35,
+                    0.5 + fx.nextDouble() * 0.5, 2.5 + fx.nextDouble() * 4 * strength);
+        }
+
+        dripTime = DRIP_DURATION;
+        dripAccum = 0;
+    }
+
+    private void addDroplet(double x, double y, double vx, double vy, double life, double size) {
+        Droplet d = new Droplet();
+        d.x = x; d.y = y; d.vx = vx; d.vy = vy;
+        d.life = d.maxLife = life;
+        d.size = size;
+        droplets.add(d);
+    }
+
+    /** Draw the flying splash droplets. */
+    private void drawSplash(Graphics2D g2) {
+        for (Droplet d : droplets) {
+            int a = (int) (230 * Math.min(1.0, d.life / d.maxLife * 2));
+            int s = (int) Math.round(d.size);
+            // Stretch along the direction of travel for a streaky water look.
+            int sy = (int) Math.round(d.size * (1 + Math.min(1.5, Math.abs(d.vy) / 600)));
+            g2.setColor(new Color(170, 225, 255, a));
+            g2.fillOval((int) d.x - s / 2, (int) d.y - sy / 2, s, sy);
+            g2.setColor(new Color(240, 252, 255, a));
+            g2.fillRect((int) d.x - s / 4, (int) d.y - sy / 3, Math.max(1, s / 3), Math.max(1, s / 3));
+        }
     }
 
     /** Ease the camera toward keeping the player centered, clamped to the world. */
@@ -175,6 +294,7 @@ public final class GamePanel extends JPanel {
         } else {
             drawDeathBurst(g2);
         }
+        drawSplash(g2);
 
         // HUD and overlays are fixed to the screen: undo the camera.
         g2.translate(cx, cy);

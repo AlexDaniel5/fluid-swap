@@ -105,6 +105,17 @@ public final class World {
     public double deathX, deathY;
     private final double spawnX, spawnY;
 
+    // Water-exit event for view-layer effects (splash, drips). `waterExits`
+    // counts every time the player leaves a pool into open air; the view watches
+    // for it to change and spawns a splash at (waterExitX, waterExitY) on the
+    // edge they crossed. (waterExitNX, waterExitNY) is that edge's outward
+    // normal — (0,-1) out the top, (±1,0) out a side, (0,1) out the bottom —
+    // and waterExitVX/VY is the player's velocity at that moment.
+    public int waterExits = 0;
+    public double waterExitX, waterExitY;
+    public double waterExitNX, waterExitNY;
+    public double waterExitVX, waterExitVY;
+
     public World(Player player) {
         this.player = player;
         this.spawnX = player.pos.x;
@@ -164,7 +175,8 @@ public final class World {
         // Determine medium from current position (water + previous grounded state).
         player.inWater = overlapsAnyWater();
         player.onWaterfall = overlapsAnyWaterfall();
-        boolean enteredStepInWater = player.inWater;
+        Water startWater = waterAt();
+        boolean enteredStepInWater = startWater != null;
 
         // Ease horizontal velocity toward the intended speed for this medium.
         player.vel.x = steerHorizontal(player.vel.x, moveDir * activeMoveSpeed(), dt);
@@ -256,6 +268,11 @@ public final class World {
             player.onGround = false;
         }
 
+        // Record a water exit (into air, not into a waterfall) for the view.
+        if (enteredStepInWater && !player.inWater && !player.onWaterfall) {
+            recordWaterExit(startWater);
+        }
+
         // Reaching the goal completes the level (latched; triggers once) — but
         // only once the player has actually landed on the finish platform, so
         // "LEVEL COMPLETE!" waits until they hit the ground, not mid-jump.
@@ -270,6 +287,29 @@ public final class World {
             deathElapsed = 0;
             deathX = player.pos.x;
             deathY = player.pos.y;
+        }
+    }
+
+    /**
+     * Work out which edge of {@code w} the player just left through and record
+     * the splash point on that edge. The player no longer overlaps {@code w},
+     * so whichever side they're now fully past is the one they crossed (the
+     * surface wins a corner exit, since that's the usual way out).
+     */
+    private void recordWaterExit(Water w) {
+        waterExits++;
+        waterExitVX = player.vel.x;
+        waterExitVY = player.vel.y;
+        double cx = Math.max(w.left(), Math.min(w.right(), player.pos.x));
+        double cy = Math.max(w.top(), Math.min(w.bottom(), player.pos.y));
+        if (player.bottom() <= w.top()) {
+            waterExitX = cx; waterExitY = w.top();    waterExitNX = 0;  waterExitNY = -1;
+        } else if (player.top() >= w.bottom()) {
+            waterExitX = cx; waterExitY = w.bottom(); waterExitNX = 0;  waterExitNY = 1;
+        } else if (player.right() <= w.left()) {
+            waterExitX = w.left();  waterExitY = cy;  waterExitNX = -1; waterExitNY = 0;
+        } else {
+            waterExitX = w.right(); waterExitY = cy;  waterExitNX = 1;  waterExitNY = 0;
         }
     }
 
@@ -342,12 +382,17 @@ public final class World {
     }
 
     private boolean overlapsAnyWater() {
+        return waterAt() != null;
+    }
+
+    /** The first water region the player overlaps, or null. */
+    private Water waterAt() {
         for (Water w : waters) {
             if (Collision.intersects(player, w)) {
-                return true;
+                return w;
             }
         }
-        return false;
+        return null;
     }
 
     private boolean overlapsAnyWaterfall() {
