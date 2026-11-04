@@ -89,7 +89,7 @@ public final class World {
     public boolean climbDown = false; // down key held (descend a waterfall)
 
     // Level completion. `finished` latches true the moment the player reaches a
-    // finish region and never clears, so the goal can't be re-triggered. While
+    // finish region and only clears via restart(), so the goal can't be re-triggered. While
     // finished the player is locked into a gentle victory bob and ignores input.
     // `finishElapsed` is seconds since completion, driving the end sequence.
     public boolean finished = false;
@@ -311,6 +311,15 @@ public final class World {
         } else {
             waterExitX = w.right(); waterExitY = cy;  waterExitNX = 1;  waterExitNY = 0;
         }
+    }
+
+    /** Restart the level after completion: clear the win latch and respawn. */
+    public void restart() {
+        finished = false;
+        finishElapsed = 0;
+        moveDir = 0;
+        jumpRequested = climbUp = climbDown = false;
+        respawn();
     }
 
     /** Return the player to the spawn point with cleared motion/medium state. */

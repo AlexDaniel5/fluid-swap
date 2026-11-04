@@ -2,6 +2,10 @@ package fluidswap;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
+import java.awt.Cursor;
+import java.awt.Rectangle;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.FontMetrics;
@@ -50,6 +54,13 @@ public final class GamePanel extends JPanel {
     private int seenWaterExits;
     private double dripTime, dripAccum, splashCooldown;
 
+    // "Play Again" button on the victory overlay (screen space). It fades in
+    // with the overlay and becomes clickable once BUTTON_DELAY has passed, so a
+    // held key or stray click right at the finish doesn't instantly restart.
+    private static final double BUTTON_DELAY = 0.6;
+    private final Rectangle playAgainBtn = new Rectangle();
+    private boolean btnHover;
+
     private static final class Droplet {
         double x, y, vx, vy, life, maxLife, size;
     }
@@ -61,9 +72,33 @@ public final class GamePanel extends JPanel {
         setFocusable(true);
 
         addKeyListener(new KeyAdapter() {
-            @Override public void keyPressed(KeyEvent e) { setKey(e.getKeyCode(), true); }
+            @Override public void keyPressed(KeyEvent e) {
+                int c = e.getKeyCode();
+                if ((c == KeyEvent.VK_ENTER || c == KeyEvent.VK_R) && playAgainReady()) {
+                    playAgain();
+                    return;
+                }
+                setKey(c, true);
+            }
             @Override public void keyReleased(KeyEvent e) { setKey(e.getKeyCode(), false); }
         });
+
+        MouseAdapter mouse = new MouseAdapter() {
+            @Override public void mouseMoved(MouseEvent e) {
+                boolean hover = playAgainReady() && playAgainBtn.contains(e.getPoint());
+                if (hover != btnHover) {
+                    btnHover = hover;
+                    setCursor(Cursor.getPredefinedCursor(hover ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR));
+                }
+            }
+            @Override public void mouseClicked(MouseEvent e) {
+                if (playAgainReady() && playAgainBtn.contains(e.getPoint())) {
+                    playAgain();
+                }
+            }
+        };
+        addMouseListener(mouse);
+        addMouseMotionListener(mouse);
 
         // ~60 FPS loop.
         Timer timer = new Timer(16, e -> tick(16 / 1000.0));
@@ -77,6 +112,25 @@ public final class GamePanel extends JPanel {
             case KeyEvent.VK_SPACE, KeyEvent.VK_UP, KeyEvent.VK_W -> jump = down;
             case KeyEvent.VK_DOWN, KeyEvent.VK_S -> this.down = down;
         }
+    }
+
+    private boolean playAgainReady() {
+        return world.finished && world.finishElapsed >= BUTTON_DELAY;
+    }
+
+    /** Restart the level and reset view-only effects back to a fresh start. */
+    private void playAgain() {
+        world.restart();
+        left = right = jump = down = false;
+        droplets.clear();
+        dripTime = dripAccum = splashCooldown = 0;
+        seenWaterExits = world.waterExits;
+        prevDead = false;
+        respawnFade = RESPAWN_FADE; // fade in at the spawn like a respawn
+        camInit = false;            // snap the camera back to the start
+        btnHover = false;
+        setCursor(Cursor.getDefaultCursor());
+        requestFocusInWindow();
     }
 
     private void tick(double dt) {
@@ -485,6 +539,31 @@ public final class GamePanel extends JPanel {
         g2.drawString(title, tx + 3, ty + 3);
         g2.setColor(new Color(235, 250, 255, (int) (appear * 255)));
         g2.drawString(title, tx, ty);
+
+        // "Play Again" button, fading in a beat after the title.
+        double btnAppear = Math.max(0, Math.min(1.0, (world.finishElapsed - 0.3) / 0.3));
+        if (btnAppear <= 0) {
+            return;
+        }
+        int bw = Math.max(200, viewW / 6), bh = Math.max(50, viewH / 13);
+        playAgainBtn.setBounds(viewW / 2 - bw / 2, ty + fm.getDescent() + 40, bw, bh);
+        int ba = (int) (btnAppear * 255);
+        boolean hot = btnHover && playAgainReady();
+        g2.setColor(hot ? new Color(110, 235, 140, ba) : new Color(80, 200, 115, ba));
+        g2.fillRoundRect(playAgainBtn.x, playAgainBtn.y, bw, bh, 16, 16);
+        g2.setColor(new Color(235, 255, 240, (int) (btnAppear * 200)));
+        g2.setStroke(new BasicStroke(2f));
+        g2.drawRoundRect(playAgainBtn.x, playAgainBtn.y, bw, bh, 16, 16);
+
+        String label = "Play Again";
+        g2.setFont(new Font("SansSerif", Font.BOLD, Math.max(20, bh * 2 / 5)));
+        FontMetrics bfm = g2.getFontMetrics();
+        g2.setColor(new Color(12, 32, 20, ba));
+        g2.drawString(label, viewW / 2 - bfm.stringWidth(label) / 2,
+                playAgainBtn.y + (bh - bfm.getHeight()) / 2 + bfm.getAscent());
+
+        drawCenteredText(g2, "Click or press Enter / R", viewW,
+                playAgainBtn.y + bh + 28, 14, new Color(170, 200, 220, (int) (btnAppear * 220)));
     }
 
     private void drawBlock(Graphics2D g2, Block b) {

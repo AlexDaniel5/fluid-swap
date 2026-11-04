@@ -29,6 +29,7 @@ public final class CollisionTest {
         testWaterExitEventOutOfSide();
         testReachingFinishCompletesLevel();
         testFinishNeedsGround();
+        testRestartAfterFinish();
         testFinishNotTriggeredWhenAway();
         testHazardKillsAndRespawns();
         testNoDeathOnSafeGround();
@@ -336,6 +337,24 @@ public final class CollisionTest {
                 Math.abs(w.waterExitX - 400) < 0.5);
         check("side splash is below the surface (y=" + round(w.waterExitY) + ")",
                 w.waterExitY > 200 && w.waterExitY < 600);
+    }
+
+    private static void testRestartAfterFinish() {
+        Player p = new Player(100, 100, 20);
+        World w = new World(p);
+        w.addBlock(new Block(0, 300, 400, 60, Block.Type.GRASS));
+        w.addFinish(new Finish(0, 240, 400, 120));
+        simulate(w, 2.0);
+        check("level finished before restart", w.finished);
+
+        w.restart();
+        check("restart clears completion", !w.finished && w.finishElapsed == 0);
+        check("restart returns player to spawn (got " + round(p.pos.x) + "," + round(p.pos.y) + ")",
+                p.pos.x == 100 && p.pos.y == 100);
+        check("restart clears velocity", p.vel.x == 0 && p.vel.y == 0);
+
+        simulate(w, 2.0);
+        check("level can be completed again after restart", w.finished);
     }
 
     private static void testReachingFinishCompletesLevel() {
