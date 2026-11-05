@@ -8,26 +8,9 @@ package fluidswap;
  *
  * (This is the "glowing area" the engine's comments always reserved a slot for.)
  */
-public final class Finish {
-
-    public final double x;
-    public final double y;
-    public final double width;
-    public final double height;
+public final class Finish extends Rect {
 
     public Finish(double x, double y, double width, double height) {
-        this.x = x;
-        this.y = y;
-        this.width = width;
-        this.height = height;
+        super(x, y, width, height);
     }
-
-    public double left()   { return x; }
-    public double right()  { return x + width; }
-    public double top()    { return y; }
-    public double bottom() { return y + height; }
-
-    /** Center of the shrine — used to anchor the victory pose and effects. */
-    public double centerX() { return x + width / 2.0; }
-    public double centerY() { return y + height / 2.0; }
 }

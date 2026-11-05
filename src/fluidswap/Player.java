@@ -18,6 +18,20 @@ public final class Player {
     /** True when the hitbox overlaps a waterfall column (can cling and climb). */
     public boolean onWaterfall = false;
 
+    /**
+     * What the character is moving through. When regions overlap (a waterfall
+     * poured into a pool, say) the priority is explicit and in declaration
+     * order: WATERFALL beats WATER beats LAND beats AIR.
+     */
+    public enum Medium { WATERFALL, WATER, LAND, AIR }
+
+    /** The current medium, derived from the region flags by the priority above. */
+    public Medium medium() {
+        if (onWaterfall) return Medium.WATERFALL;
+        if (inWater)     return Medium.WATER;
+        return onGround ? Medium.LAND : Medium.AIR;
+    }
+
     public Player(double x, double y, double radius) {
         this.pos = new Vec2(x, y);
         this.radius = radius;

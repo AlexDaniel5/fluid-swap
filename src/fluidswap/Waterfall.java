@@ -10,22 +10,9 @@ package fluidswap;
  * Waterfalls are the vertical "ladders" that connect islands at different
  * heights.
  */
-public final class Waterfall {
-
-    public final double x;
-    public final double y;
-    public final double width;
-    public final double height;
+public final class Waterfall extends Rect {
 
     public Waterfall(double x, double y, double width, double height) {
-        this.x = x;
-        this.y = y;
-        this.width = width;
-        this.height = height;
+        super(x, y, width, height);
     }
-
-    public double left()   { return x; }
-    public double right()  { return x + width; }
-    public double top()    { return y; }
-    public double bottom() { return y + height; }
 }

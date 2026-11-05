@@ -16,9 +16,12 @@ import java.awt.Polygon;
 import java.awt.RenderingHints;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import javax.swing.JPanel;
 import javax.swing.Timer;
@@ -34,6 +37,16 @@ public final class GamePanel extends JPanel {
 
     private boolean left, right, jump, down;
     private long frame; // animation counter for the waterfalls
+
+    // Blocks are static, so each is rendered once into a sprite and blitted
+    // every frame instead of re-drawing its speckles and grass blades.
+    // BLOCK_PAD is transparent space around the box: grass blades poke up to
+    // 10 px above the top edge, and outline strokes spill 1 px past the box.
+    private static final int BLOCK_PAD = 12;
+    private final Map<Block, BufferedImage> blockSprites = new IdentityHashMap<>();
+    // Extra world-space margin when culling against the view, so things that
+    // draw slightly outside their bounds (blades, glows) don't pop at the edge.
+    private static final int CULL_MARGIN = 32;
 
     // Camera top-left in world coordinates (eased toward the player each tick).
     private double camX, camY;
@@ -301,12 +314,19 @@ public final class GamePanel extends JPanel {
         int cy = (int) Math.round(camY);
         g2.translate(-cx, -cy);
 
+        // World-space view rectangle for culling off-screen terrain.
+        double vl = cx - CULL_MARGIN, vt = cy - CULL_MARGIN;
+        double vr = cx + viewW + CULL_MARGIN, vb = cy + viewH + CULL_MARGIN;
+
         for (Block b : world.blocks) {
-            drawBlock(g2, b);
+            if (b.overlaps(vl, vt, vr, vb)) {
+                g2.drawImage(blockSprite(b), (int) b.x - BLOCK_PAD, (int) b.y - BLOCK_PAD, null);
+            }
         }
 
         // Water regions (drawn translucent, under the player).
         for (Water w : world.waters) {
+            if (!w.overlaps(vl, vt, vr, vb)) continue;
             g2.setColor(new Color(60, 140, 230, 120));
             g2.fillRect((int) w.x, (int) w.y, (int) w.width, (int) w.height);
             g2.setColor(new Color(120, 190, 255, 160));
@@ -316,11 +336,13 @@ public final class GamePanel extends JPanel {
 
         // Hazards: the deadly abyss trench (dark water + jagged spikes).
         for (Hazard h : world.hazards) {
+            if (!h.overlaps(vl, vt, vr, vb)) continue;
             drawHazard(g2, h);
         }
 
         // Waterfalls: translucent column with animated downward streaks.
         for (Waterfall f : world.waterfalls) {
+            if (!f.overlaps(vl, vt, vr, vb)) continue;
             drawWaterfall(g2, f);
         }
 
@@ -328,11 +350,14 @@ public final class GamePanel extends JPanel {
         g2.setColor(new Color(20, 20, 24));
         g2.setStroke(new BasicStroke(3f));
         for (Platform pf : world.platforms) {
+            // Zero height, so test it as a line: horizontal extent + its y.
+            if (pf.right() < vl || pf.left() > vr || pf.top() < vt || pf.top() > vb) continue;
             g2.drawLine((int) pf.left(), (int) pf.top(), (int) pf.right(), (int) pf.top());
         }
 
         // Finish: a simple flag pole on the dry platform.
         for (Finish gf : world.finishes) {
+            if (!gf.overlaps(vl, vt, vr, vb)) continue;
             drawFinish(g2, gf);
         }
 
@@ -367,9 +392,12 @@ public final class GamePanel extends JPanel {
                 g2.setColor(new Color(4, 8, 16, a));
                 g2.fillRect(0, 0, viewW, viewH);
             }
-            String medium = p.onWaterfall ? "WATERFALL (climb)"
-                    : p.inWater ? "WATER (fast)"
-                    : (p.onGround ? "LAND (slow)" : "AIR (medium)");
+            String medium = switch (p.medium()) {
+                case WATERFALL -> "WATERFALL (climb)";
+                case WATER -> "WATER (fast)";
+                case LAND -> "LAND (slow)";
+                case AIR -> "AIR (medium)";
+            };
             g2.setColor(new Color(150, 160, 180));
             g2.drawString("Move: A/D or ←/→   Jump/Swim/Climb up: Space/W/↑   Climb down: S/↓", 12, 20);
             g2.drawString("Medium: " + medium + "   speed=" + (int) world.activeMoveSpeed(), 12, 38);
@@ -566,64 +594,60 @@ public final class GamePanel extends JPanel {
                 playAgainBtn.y + bh + 28, 14, new Color(170, 200, 220, (int) (btnAppear * 220)));
     }
 
-    private void drawBlock(Graphics2D g2, Block b) {
-        int x = (int) b.x, y = (int) b.y, w = (int) b.width, h = (int) b.height;
+    /** The cached sprite for a block, rendering it on first use. */
+    private BufferedImage blockSprite(Block b) {
+        return blockSprites.computeIfAbsent(b, GamePanel::renderBlockSprite);
+    }
+
+    /**
+     * Render a block once into a sprite. The box's top-left sits at
+     * (BLOCK_PAD, BLOCK_PAD) inside the image, so draw it at
+     * (b.x - BLOCK_PAD, b.y - BLOCK_PAD).
+     */
+    private static BufferedImage renderBlockSprite(Block b) {
+        int w = (int) b.width, h = (int) b.height;
+        BufferedImage img = new BufferedImage(w + 2 * BLOCK_PAD, h + 2 * BLOCK_PAD,
+                BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = img.createGraphics();
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2.translate(BLOCK_PAD, BLOCK_PAD);
+        // Seeded from world position so the look matches the old per-frame draw.
+        Random r = new Random(((long) (int) b.x << 20) ^ ((int) b.y * 31L) ^ w);
         switch (b.type) {
             case SOLID -> {
                 g2.setColor(new Color(70, 76, 96));
-                g2.fillRect(x, y, w, h);
+                g2.fillRect(0, 0, w, h);
                 g2.setColor(new Color(100, 108, 132));
-                g2.drawRect(x, y, w, h);
-            }
-            case CREST -> {
-                g2.setColor(new Color(58, 110, 78));
-                g2.fillRect(x, y, w, h);
-                // Ridged "crest" highlight along the top edge.
-                g2.setColor(new Color(120, 200, 140));
-                g2.setStroke(new BasicStroke(3f));
-                g2.drawLine(x, y, x + w, y);
-            }
-            case BLOTCHY -> {
-                g2.setColor(new Color(96, 70, 60));
-                g2.fillRect(x, y, w, h);
-                // Speckled blotches scattered across the block.
-                g2.setColor(new Color(130, 100, 84));
-                Random r = new Random(((long) x << 20) ^ (y * 31L) ^ w); // stable per block
-                int count = Math.max(6, (w * h) / 500);
-                for (int i = 0; i < count; i++) {
-                    int bx = x + r.nextInt(Math.max(1, w));
-                    int by = y + r.nextInt(Math.max(1, h));
-                    int bs = 3 + r.nextInt(6);
-                    g2.fillOval(bx, by, bs, bs);
-                }
+                g2.drawRect(0, 0, w, h);
             }
             case GRASS -> {
-                Random r = new Random(((long) x << 20) ^ (y * 31L) ^ w); // stable per block
                 // Dirt body with speckles.
                 g2.setColor(new Color(110, 78, 52));
-                g2.fillRect(x, y, w, h);
+                g2.fillRect(0, 0, w, h);
                 g2.setColor(new Color(92, 62, 42));
                 int count = Math.max(6, (w * h) / 700);
                 for (int i = 0; i < count; i++) {
-                    int bx = x + r.nextInt(Math.max(1, w));
-                    int by = y + 12 + r.nextInt(Math.max(1, h - 12));
+                    int bx = r.nextInt(Math.max(1, w));
+                    int by = 12 + r.nextInt(Math.max(1, h - 12));
                     int bs = 2 + r.nextInt(5);
                     g2.fillOval(bx, by, bs, bs);
                 }
                 // Grass band across the top, with a brighter lip.
                 g2.setColor(new Color(72, 150, 72));
-                g2.fillRect(x, y, w, 12);
+                g2.fillRect(0, 0, w, 12);
                 g2.setColor(new Color(118, 202, 104));
-                g2.fillRect(x, y, w, 4);
+                g2.fillRect(0, 0, w, 4);
                 // Grass blades poking up above the surface.
                 g2.setColor(new Color(96, 182, 92));
-                for (int bx = x + 3; bx < x + w; bx += 10) {
+                for (int bx = 3; bx < w; bx += 10) {
                     int bh = 4 + r.nextInt(6);
-                    g2.fillRect(bx, y - bh, 3, bh);
+                    g2.fillRect(bx, -bh, 3, bh);
                 }
                 g2.setColor(new Color(50, 40, 32));
-                g2.drawRect(x, y, w, h);
+                g2.drawRect(0, 0, w, h);
             }
         }
+        g2.dispose();
+        return img;
     }
 }

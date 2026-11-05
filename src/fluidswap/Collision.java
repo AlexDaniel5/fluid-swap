@@ -26,34 +26,9 @@ public final class Collision {
         static final Hit NONE = new Hit(false, 0, 0, 0, 0);
     }
 
-    /** @return true if the player's box overlaps the block's box at all. */
-    public static boolean intersects(Player p, Block b) {
-        return p.right() > b.left() && p.left() < b.right()
-            && p.bottom() > b.top() && p.top() < b.bottom();
-    }
-
-    /** @return true if the player's box overlaps a water region. */
-    public static boolean intersects(Player p, Water w) {
-        return p.right() > w.left() && p.left() < w.right()
-            && p.bottom() > w.top() && p.top() < w.bottom();
-    }
-
-    /** @return true if the player's box overlaps a waterfall column. */
-    public static boolean intersects(Player p, Waterfall f) {
-        return p.right() > f.left() && p.left() < f.right()
-            && p.bottom() > f.top() && p.top() < f.bottom();
-    }
-
-    /** @return true if the player's box overlaps the finish (goal) region. */
-    public static boolean intersects(Player p, Finish g) {
-        return p.right() > g.left() && p.left() < g.right()
-            && p.bottom() > g.top() && p.top() < g.bottom();
-    }
-
-    /** @return true if the player's box overlaps a lethal hazard region. */
-    public static boolean intersects(Player p, Hazard h) {
-        return p.right() > h.left() && p.left() < h.right()
-            && p.bottom() > h.top() && p.top() < h.bottom();
+    /** @return true if the player's box overlaps the rectangle (any terrain kind). */
+    public static boolean intersects(Player p, Rect r) {
+        return r.overlaps(p.left(), p.top(), p.right(), p.bottom());
     }
 
     /**
@@ -71,14 +46,14 @@ public final class Collision {
 
         if (overlapX < overlapY) {
             // Resolve horizontally, toward whichever side the player center is on.
-            if (p.pos.x < (b.left() + b.right()) / 2.0) {
+            if (p.pos.x < b.centerX()) {
                 return new Hit(true, -overlapX, 0, -1, 0); // push left
             } else {
                 return new Hit(true, overlapX, 0, 1, 0);   // push right
             }
         } else {
             // Resolve vertically.
-            if (p.pos.y < (b.top() + b.bottom()) / 2.0) {
+            if (p.pos.y < b.centerY()) {
                 return new Hit(true, 0, -overlapY, 0, -1); // push up (landing on top)
             } else {
                 return new Hit(true, 0, overlapY, 0, 1);   // push down (hit ceiling)

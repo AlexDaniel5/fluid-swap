@@ -39,6 +39,12 @@ public final class CollisionTest {
         testWaterfallDetection();
         testWaterfallClimbUp();
         testWaterfallSlipIsSlow();
+        testFallSpeedIsCapped();
+        testNoTunnelingOnLongFrame();
+        testWaterfallTakesPriorityOverWater();
+        testWalkAcrossAdjacentBlocks();
+        testRealLevelValidates();
+        testValidatorCatchesBadLayout();
 
         System.out.printf("%n%d passed, %d failed%n", passed, failed);
         if (failed > 0) {
@@ -64,7 +70,7 @@ public final class CollisionTest {
     private static void testBallRestsOnGround() {
         Player p = new Player(100, 0, 20);
         World w = new World(p);
-        w.addBlock(new Block(0, 500, 400, 100, Block.Type.CREST)); // ground at y=500
+        w.addBlock(new Block(0, 500, 400, 100, Block.Type.SOLID)); // ground at y=500
 
         simulate(w, 3.0); // let it fall and settle
 
@@ -80,7 +86,7 @@ public final class CollisionTest {
     private static void testBallStoppedByWall() {
         Player p = new Player(100, 100, 20);
         World w = new World(p);
-        w.addBlock(new Block(0, 460, 400, 140, Block.Type.CREST));  // floor to stand on
+        w.addBlock(new Block(0, 460, 400, 140, Block.Type.SOLID));  // floor to stand on
         w.addBlock(new Block(200, 0, 40, 460, Block.Type.SOLID));   // wall; left face at x=200
         w.moveDir = 1; // drive right into the wall
 
@@ -105,7 +111,7 @@ public final class CollisionTest {
     private static void testCornerPushOut() {
         // Circle center diagonally off a block corner, overlapping it.
         Player p = new Player(100, 100, 20);
-        Block b = new Block(105, 105, 60, 60, Block.Type.BLOTCHY);
+        Block b = new Block(105, 105, 60, 60, Block.Type.SOLID);
         Collision.Hit hit = Collision.resolve(p, b);
         check("corner overlap is detected", hit.collided);
 
@@ -141,7 +147,7 @@ public final class CollisionTest {
         // Moving in water uses the fast speed and covers more ground than on land.
         Player land = new Player(100, 100, 20);
         World lw = new World(land);
-        lw.addBlock(new Block(0, 140, 400, 60, Block.Type.CREST)); // floor to stand on
+        lw.addBlock(new Block(0, 140, 400, 60, Block.Type.SOLID)); // floor to stand on
         land.onGround = true;
         lw.moveDir = 1;
         for (int i = 0; i < 60; i++) lw.step(1.0 / 60.0);
@@ -161,7 +167,7 @@ public final class CollisionTest {
     private static void testGradualTurnAround() {
         Player p = new Player(100, 100, 20);
         World w = new World(p);
-        w.addBlock(new Block(-2000, 120, 6000, 60, Block.Type.CREST)); // long floor
+        w.addBlock(new Block(-2000, 120, 6000, 60, Block.Type.SOLID)); // long floor
         w.moveDir = 1;
         simulate(w, 1.0);
         check("reaches land top speed moving right (got " + round(p.vel.x) + ")",
@@ -205,7 +211,7 @@ public final class CollisionTest {
         if (inWater) {
             w.addWater(new Water(-5000, 0, 10000, 5000));
         } else {
-            w.addBlock(new Block(-5000, 120, 10000, 60, Block.Type.CREST));
+            w.addBlock(new Block(-5000, 120, 10000, 60, Block.Type.SOLID));
             p.onGround = true;
         }
         w.moveDir = 1;
@@ -394,7 +400,7 @@ public final class CollisionTest {
     private static void testFinishNotTriggeredWhenAway() {
         Player p = new Player(100, 100, 20);
         World w = new World(p);
-        w.addBlock(new Block(0, 140, 400, 60, Block.Type.CREST)); // floor
+        w.addBlock(new Block(0, 140, 400, 60, Block.Type.SOLID)); // floor
         w.addFinish(new Finish(3000, 3000, 100, 100));            // far away
         p.onGround = true;
         for (int i = 0; i < 120; i++) w.step(1.0 / 240.0);
@@ -405,7 +411,7 @@ public final class CollisionTest {
         double dt = 1.0 / 240.0;
         Player p = new Player(500, 100, 20);   // spawn point captured here
         World w = new World(p);
-        w.addBlock(new Block(400, 180, 200, 60, Block.Type.CREST)); // ground under spawn
+        w.addBlock(new Block(400, 180, 200, 60, Block.Type.SOLID)); // ground under spawn
         w.addHazard(new Hazard(0, 1000, 2000, 200));                // deadly depths, far below
 
         for (int i = 0; i < 180; i++) w.step(dt); // settle on the spawn ground
@@ -438,7 +444,7 @@ public final class CollisionTest {
     private static void testNoDeathOnSafeGround() {
         Player p = new Player(100, 100, 20);
         World w = new World(p);
-        w.addBlock(new Block(0, 140, 400, 60, Block.Type.CREST));
+        w.addBlock(new Block(0, 140, 400, 60, Block.Type.SOLID));
         w.addHazard(new Hazard(2000, 2000, 100, 100)); // far away
         p.onGround = true;
         for (int i = 0; i < 240; i++) w.step(1.0 / 240.0);
@@ -532,6 +538,72 @@ public final class CollisionTest {
                 slipDist > 0 && slipDist < 120);
         check("clinging is far slower than free-fall (slip=" + round(slipDist)
                 + ", freefall=" + round(fallDist) + ")", slipDist < fallDist / 2);
+    }
+
+    private static void testFallSpeedIsCapped() {
+        Player p = new Player(100, 0, 20);
+        World w = new World(p); // empty: free-fall
+        simulate(w, 3.0);
+        check("free-fall is capped at MAX_FALL_SPEED (got " + round(p.vel.y) + ")",
+                p.vel.y <= World.MAX_FALL_SPEED + 1e-9);
+    }
+
+    private static void testNoTunnelingOnLongFrame() {
+        // One 0.25 s frame at terminal velocity moves 300 px — far more than
+        // the 40 px block — yet substepping must still land the player on it.
+        Player p = new Player(100, 0, 20);
+        World w = new World(p);
+        w.addBlock(new Block(0, 200, 400, 40, Block.Type.GRASS));
+        p.vel.y = World.MAX_FALL_SPEED;
+        w.step(0.25);
+        check("long frame does not tunnel through a thin block (bottom="
+                + round(p.bottom()) + ")", Math.abs(p.bottom() - 200) < 1.0);
+        check("landed on the block after a long frame", p.onGround);
+    }
+
+    private static void testWaterfallTakesPriorityOverWater() {
+        Player p = new Player(100, 300, 20);
+        World w = new World(p);
+        w.addWater(new Water(0, 0, 400, 800));
+        w.addWaterfall(new Waterfall(60, 0, 80, 800)); // poured into the pool
+        w.climbUp = true;
+        w.step(1.0 / 240.0);
+        check("waterfall beats water when both overlap", p.medium() == Player.Medium.WATERFALL);
+        check("…so the climb speed applies, not swimming (vy=" + round(p.vel.y) + ")",
+                p.vel.y == -World.CLIMB_SPEED);
+    }
+
+    private static void testWalkAcrossAdjacentBlocks() {
+        // Two floor blocks meeting at a seam: walking across must not snag.
+        Player p = new Player(150, 120, 20);
+        World w = new World(p);
+        w.addBlock(new Block(0, 140, 200, 60, Block.Type.GRASS));
+        w.addBlock(new Block(200, 140, 200, 60, Block.Type.GRASS));
+        p.onGround = true;
+        w.moveDir = 1;
+        simulate(w, 1.0);
+        check("walked across the block seam (x=" + round(p.pos.x) + ")", p.pos.x > 250);
+        check("stayed grounded across the seam", p.onGround);
+    }
+
+    private static void testRealLevelValidates() {
+        java.util.List<String> problems = LevelValidator.validate(Level.build());
+        check("real level passes terrain validation " + problems, problems.isEmpty());
+    }
+
+    private static void testValidatorCatchesBadLayout() {
+        Player p = new Player(100, 100, 20);
+        World w = new World(p);
+        w.addBlock(new Block(80, 80, 60, 60, Block.Type.SOLID));   // spawn inside
+        w.addBlock(new Block(120, 120, 60, 60, Block.Type.SOLID)); // overlaps the first
+        w.addFinish(new Finish(1000, 0, 100, 100));                // nothing to stand on
+        w.addWaterfall(new Waterfall(500, 0, 40, 300));            // no pools at all
+        String all = String.join(" | ", LevelValidator.validate(w));
+        check("validator flags spawn inside a block", all.contains("spawn is inside a block"));
+        check("validator flags overlapping blocks", all.contains("blocks overlap"));
+        check("validator flags a floating finish", all.contains("no block top to stand on"));
+        check("validator flags a waterfall outside pools",
+                all.contains("does not start inside a pool") && all.contains("does not end inside a pool"));
     }
 
     // --- helpers ---------------------------------------------------------

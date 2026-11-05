@@ -74,6 +74,18 @@ public final class World {
     public static final double CLIMB_SPEED = 90.0;         // up/down climb (slow)
     public static final double WATERFALL_SLIP = 45.0;      // gentle downward drift
 
+    // Terminal velocity. Without a cap a fall from the top of the level reaches
+    // ~2,470 px/s (~41 px per 60 Hz frame), enough to tunnel through the 40 px
+    // walls and grass blocks. Movement is also substepped (MAX_SUBSTEP_FRACTION
+    // of the player's radius per substep) so even a long frame can't skip
+    // through thin terrain.
+    public static final double MAX_FALL_SPEED = 1200.0;    // px / s
+    public static final double MAX_SUBSTEP_FRACTION = 0.5; // of player.radius
+
+    // A descending player lands on a one-way platform if their feet were at
+    // most this far below its line on the previous substep (absorbs float error).
+    public static final double PLATFORM_LANDING_TOLERANCE = 1.0; // px
+
     public final Player player;
     public final List<Block> blocks = new ArrayList<>();
     public final List<Water> waters = new ArrayList<>();
@@ -122,6 +134,9 @@ public final class World {
         this.spawnY = player.pos.y;
     }
 
+    public double spawnX() { return spawnX; }
+    public double spawnY() { return spawnY; }
+
     public void addBlock(Block b) { blocks.add(b); }
     public void addWater(Water w) { waters.add(w); }
     public void addWaterfall(Waterfall f) { waterfalls.add(f); }
@@ -152,7 +167,7 @@ public final class World {
             player.vel.x = player.vel.y = 0;
             player.pos.x = finishAnchorX;
             player.pos.y = finishAnchorY;
-            player.inWater = overlapsAnyWater();
+            player.inWater = overlapsAny(waters);
             player.onWaterfall = false;
             return;
         }
@@ -173,15 +188,16 @@ public final class World {
         }
 
         // Determine medium from current position (water + previous grounded state).
-        player.inWater = overlapsAnyWater();
-        player.onWaterfall = overlapsAnyWaterfall();
-        Water startWater = waterAt();
+        player.inWater = overlapsAny(waters);
+        player.onWaterfall = overlapsAny(waterfalls);
+        Water startWater = deepestWater();
         boolean enteredStepInWater = startWater != null;
 
         // Ease horizontal velocity toward the intended speed for this medium.
         player.vel.x = steerHorizontal(player.vel.x, moveDir * activeMoveSpeed(), dt);
 
-        if (player.onWaterfall) {
+        Player.Medium medium = player.medium();
+        if (medium == Player.Medium.WATERFALL) {
             // Cling to the rushing water: climb slowly up/down, or slip gently.
             // Gravity is ignored while clinging.
             if (climbUp && !climbDown) {
@@ -193,7 +209,7 @@ public final class World {
             }
             player.onGround = false;
             jumpRequested = false;
-        } else if (player.inWater) {
+        } else if (medium == Player.Medium.WATER) {
             // Swimming. Holding up/down eases the vertical velocity toward a
             // target ascent/dive speed at a fixed acceleration, so reversing
             // (ascend -> dive) is a gradual turn that takes longer the faster
@@ -217,49 +233,23 @@ public final class World {
             jumpRequested = false;
             player.vel.y += GRAVITY * dt;
         }
+        player.vel.y = Math.min(player.vel.y, MAX_FALL_SPEED);
 
-        // Integrate (remembering where the player's feet were, for one-way platforms).
-        double prevBottom = player.bottom();
-        player.pos.add(player.vel.x * dt, player.vel.y * dt);
-
-        // Resolve collisions against all terrain.
+        // Integrate and collide in small substeps so fast motion can't tunnel.
         player.onGround = false;
-        for (Block b : blocks) {
-            Collision.Hit hit = Collision.resolve(player, b);
-            if (!hit.collided) {
-                continue;
-            }
-            player.pos.add(hit.pushX, hit.pushY);
-
-            // Cancel velocity into the surface.
-            if (hit.normalX != 0 && Math.signum(player.vel.x) == -Math.signum(hit.normalX)) {
-                player.vel.x = 0;
-            }
-            if (hit.normalY != 0 && Math.signum(player.vel.y) == -Math.signum(hit.normalY)) {
-                player.vel.y = 0;
-            }
-            // Landing on top of a block (normal points up).
-            if (hit.normalY < 0) {
-                player.onGround = true;
-            }
-        }
-
-        // One-way platforms: a descending player that was above the line last
-        // frame lands on top; a rising player passes straight up through it.
-        for (Platform pf : platforms) {
-            if (player.vel.y >= 0
-                    && player.right() > pf.left() && player.left() < pf.right()
-                    && prevBottom <= pf.top() + 1
-                    && player.bottom() >= pf.top()) {
-                player.pos.y = pf.top() - player.radius;
-                player.vel.y = 0;
-                player.onGround = true;
-            }
+        double dx = player.vel.x * dt, dy = player.vel.y * dt;
+        double maxStep = Math.max(1e-6, player.radius * MAX_SUBSTEP_FRACTION);
+        int substeps = Math.max(1, (int) Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / maxStep));
+        double subDt = dt / substeps;
+        for (int i = 0; i < substeps; i++) {
+            // Re-read velocity each substep: a wall or floor hit zeroes it, and
+            // the remaining substeps must not keep driving into the surface.
+            moveAndCollide(player.vel.x * subDt, player.vel.y * subDt);
         }
 
         // Re-evaluate region state after moving so it is accurate for rendering.
-        player.inWater = overlapsAnyWater();
-        player.onWaterfall = overlapsAnyWaterfall();
+        player.inWater = overlapsAny(waters);
+        player.onWaterfall = overlapsAny(waterfalls);
 
         // If this step carried the character up and out through the surface
         // while jump was held, launch them with a strong exit burst.
@@ -277,12 +267,12 @@ public final class World {
         // only once the player has actually landed on the finish platform, so
         // "LEVEL COMPLETE!" waits until they hit the ground, not mid-jump.
         // Falling into a hazard kills the player (checked only if not winning).
-        if (player.onGround && overlapsAnyFinish()) {
+        if (player.onGround && overlapsAny(finishes)) {
             finished = true;
             finishElapsed = 0;
             finishAnchorX = player.pos.x;
             finishAnchorY = player.pos.y;
-        } else if (overlapsAnyHazard()) {
+        } else if (overlapsAny(hazards)) {
             dead = true;
             deathElapsed = 0;
             deathX = player.pos.x;
@@ -334,18 +324,53 @@ public final class World {
         player.onWaterfall = false;
     }
 
-    private boolean overlapsAnyFinish() {
-        for (Finish g : finishes) {
-            if (Collision.intersects(player, g)) {
-                return true;
+    /**
+     * Move the player by (dx, dy) and resolve it against solid blocks and
+     * one-way platforms. Sets {@code onGround} if anything is landed on; the
+     * caller clears it once per step, before the first substep.
+     */
+    private void moveAndCollide(double dx, double dy) {
+        double prevBottom = player.bottom(); // feet before this substep (one-way platforms)
+        player.pos.add(dx, dy);
+
+        for (Block b : blocks) {
+            Collision.Hit hit = Collision.resolve(player, b);
+            if (!hit.collided) {
+                continue;
+            }
+            player.pos.add(hit.pushX, hit.pushY);
+
+            // Cancel velocity into the surface.
+            if (hit.normalX != 0 && Math.signum(player.vel.x) == -Math.signum(hit.normalX)) {
+                player.vel.x = 0;
+            }
+            if (hit.normalY != 0 && Math.signum(player.vel.y) == -Math.signum(hit.normalY)) {
+                player.vel.y = 0;
+            }
+            // Landing on top of a block (normal points up).
+            if (hit.normalY < 0) {
+                player.onGround = true;
             }
         }
-        return false;
+
+        // One-way platforms: a descending player that was above the line last
+        // substep lands on top; a rising player passes straight up through it.
+        for (Platform pf : platforms) {
+            if (player.vel.y >= 0
+                    && player.right() > pf.left() && player.left() < pf.right()
+                    && prevBottom <= pf.top() + PLATFORM_LANDING_TOLERANCE
+                    && player.bottom() >= pf.top()) {
+                player.pos.y = pf.top() - player.radius;
+                player.vel.y = 0;
+                player.onGround = true;
+            }
+        }
     }
 
-    private boolean overlapsAnyHazard() {
-        for (Hazard h : hazards) {
-            if (Collision.intersects(player, h)) {
+    /** @return true if the player's hitbox overlaps any rectangle in the list. */
+    private boolean overlapsAny(List<? extends Rect> regions) {
+        for (Rect r : regions) {
+            if (Collision.intersects(player, r)) {
                 return true;
             }
         }
@@ -390,26 +415,21 @@ public final class World {
         return value + Math.signum(diff) * maxDelta;
     }
 
-    private boolean overlapsAnyWater() {
-        return waterAt() != null;
-    }
-
-    /** The first water region the player overlaps, or null. */
-    private Water waterAt() {
+    /**
+     * The water region the player overlaps most, or null. With overlapping or
+     * touching pools this is the one they are actually "in", so a water exit is
+     * attributed to the right pool's edge.
+     */
+    private Water deepestWater() {
+        Water best = null;
+        double bestArea = 0;
         for (Water w : waters) {
-            if (Collision.intersects(player, w)) {
-                return w;
+            double a = w.overlapArea(player);
+            if (a > bestArea) {
+                bestArea = a;
+                best = w;
             }
         }
-        return null;
-    }
-
-    private boolean overlapsAnyWaterfall() {
-        for (Waterfall f : waterfalls) {
-            if (Collision.intersects(player, f)) {
-                return true;
-            }
-        }
-        return false;
+        return best;
     }
 }
