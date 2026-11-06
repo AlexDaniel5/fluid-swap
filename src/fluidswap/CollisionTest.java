@@ -33,6 +33,8 @@ public final class CollisionTest {
         testFinishNotTriggeredWhenAway();
         testHazardKillsAndRespawns();
         testNoDeathOnSafeGround();
+        testUrchinKillsAndWaitsForRetry();
+        testUrchinSparesNearbyPlayer();
         testSpawnPlatformIsSafe();
         testOneWayPlatformLandsFromAbove();
         testOneWayPlatformPassesFromBelow();
@@ -405,6 +407,37 @@ public final class CollisionTest {
         p.onGround = true;
         for (int i = 0; i < 120; i++) w.step(1.0 / 240.0);
         check("goal not triggered when the player is nowhere near it", !w.finished);
+    }
+
+    private static void testUrchinKillsAndWaitsForRetry() {
+        double dt = 1.0 / 240.0;
+        Player p = new Player(500, 100, 20);
+        World w = new World(p);
+        Block ground = new Block(300, 180, 600, 60, Block.Type.SOLID);
+        w.addBlock(ground);
+        w.addUrchin(Urchin.restingOn(ground, 620, 18, 14));
+        for (int i = 0; i < 120; i++) w.step(dt); // settle on the ground
+        check("alive before touching the urchin", !w.dead);
+
+        w.moveDir = 1;
+        for (int i = 0; i < 480 && !w.dead; i++) w.step(dt); // walk into it
+        check("walking into the urchin kills", w.dead && w.killedByEnemy);
+
+        w.moveDir = 0;
+        for (int i = 0; i < (int) (5 / dt); i++) w.step(dt);
+        check("urchin death does not auto-respawn", w.dead && w.killedByEnemy);
+
+        w.retry();
+        check("retry revives at spawn", !w.dead && !w.killedByEnemy
+                && p.pos.x == w.spawnX() && p.pos.y == w.spawnY());
+    }
+
+    private static void testUrchinSparesNearbyPlayer() {
+        Player p = new Player(500, 100, 20);
+        Urchin u = new Urchin(500 + 20 + 18 + 14 + 1, 100, 18, 14); // just past spine tips
+        check("player beyond the spines is safe", !u.touches(p));
+        Urchin close = new Urchin(500 + 20 + 18, 100, 18, 14);       // touching the shell
+        check("player touching the shell is hit", close.touches(p));
     }
 
     private static void testHazardKillsAndRespawns() {

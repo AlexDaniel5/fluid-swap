@@ -46,7 +46,10 @@ public final class Level {
         // Square 3: a water section with one grass block for footing.
         Water square3 = new Water(1360, 440, 640, 390);         // x[1360..2000], y[440..830]
         world.addWater(square3);
-        world.addBlock(new Block(1540, 760, 280, 48, Block.Type.GRASS));
+        Block square3Grass = new Block(1540, 760, 280, 48, Block.Type.GRASS);
+        world.addBlock(square3Grass);
+        // A sea urchin guards the middle of that grass block — touch it and you die.
+        world.addUrchin(Urchin.restingOn(square3Grass, square3Grass.centerX(), 18, 14));
 
         // The single waterfall: climb it from square 2 up into square 3. It is
         // derived from the two pools so it always lines up flush with both.

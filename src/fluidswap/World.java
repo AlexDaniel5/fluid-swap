@@ -93,6 +93,7 @@ public final class World {
     public final List<Finish> finishes = new ArrayList<>();
     public final List<Hazard> hazards = new ArrayList<>();
     public final List<Platform> platforms = new ArrayList<>(); // one-way (land from above)
+    public final List<Urchin> urchins = new ArrayList<>();     // enemies (touch = death)
 
     // Input intent, set by the controller each frame.
     public double moveDir = 0;       // -1 left, +1 right, 0 none
@@ -115,6 +116,9 @@ public final class World {
     public boolean dead = false;
     public double deathElapsed = 0;
     public double deathX, deathY;
+    // True when the death came from an enemy: instead of auto-respawning, the
+    // world stays on the "YOU DIED" screen until retry() is called.
+    public boolean killedByEnemy = false;
     private final double spawnX, spawnY;
 
     // Water-exit event for view-layer effects (splash, drips). `waterExits`
@@ -143,6 +147,7 @@ public final class World {
     public void addFinish(Finish g) { finishes.add(g); }
     public void addHazard(Hazard h) { hazards.add(h); }
     public void addPlatform(Platform pf) { platforms.add(pf); }
+    public void addUrchin(Urchin u) { urchins.add(u); }
 
     /**
      * The active horizontal speed given the character's current medium. A
@@ -181,7 +186,7 @@ public final class World {
             player.vel.x = player.vel.y = 0;
             player.pos.x = deathX;
             player.pos.y = deathY;
-            if (deathElapsed >= DEATH_DURATION) {
+            if (!killedByEnemy && deathElapsed >= DEATH_DURATION) {
                 respawn();
             }
             return;
@@ -272,12 +277,33 @@ public final class World {
             finishElapsed = 0;
             finishAnchorX = player.pos.x;
             finishAnchorY = player.pos.y;
+        } else if (touchesUrchin()) {
+            die(true);
         } else if (overlapsAny(hazards)) {
-            dead = true;
-            deathElapsed = 0;
-            deathX = player.pos.x;
-            deathY = player.pos.y;
+            die(false);
         }
+    }
+
+    private void die(boolean byEnemy) {
+        dead = true;
+        killedByEnemy = byEnemy;
+        deathElapsed = 0;
+        deathX = player.pos.x;
+        deathY = player.pos.y;
+    }
+
+    private boolean touchesUrchin() {
+        for (Urchin u : urchins) {
+            if (u.touches(player)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Retry after an enemy death: back to the spawn with input cleared. */
+    public void retry() {
+        restart();
     }
 
     /**
@@ -315,6 +341,7 @@ public final class World {
     /** Return the player to the spawn point with cleared motion/medium state. */
     private void respawn() {
         dead = false;
+        killedByEnemy = false;
         deathElapsed = 0;
         player.pos.x = spawnX;
         player.pos.y = spawnY;

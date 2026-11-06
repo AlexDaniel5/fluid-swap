@@ -71,7 +71,10 @@ public final class GamePanel extends JPanel {
     // with the overlay and becomes clickable once BUTTON_DELAY has passed, so a
     // held key or stray click right at the finish doesn't instantly restart.
     private static final double BUTTON_DELAY = 0.6;
-    private final Rectangle playAgainBtn = new Rectangle();
+    // The "YOU DIED" screen (enemy deaths) shows its Retry button after the
+    // death burst has had a moment to play.
+    private static final double DIED_BUTTON_DELAY = 0.9;
+    private final Rectangle overlayBtn = new Rectangle();
     private boolean btnHover;
 
     private static final class Droplet {
@@ -87,7 +90,7 @@ public final class GamePanel extends JPanel {
         addKeyListener(new KeyAdapter() {
             @Override public void keyPressed(KeyEvent e) {
                 int c = e.getKeyCode();
-                if ((c == KeyEvent.VK_ENTER || c == KeyEvent.VK_R) && playAgainReady()) {
+                if ((c == KeyEvent.VK_ENTER || c == KeyEvent.VK_R) && buttonReady()) {
                     playAgain();
                     return;
                 }
@@ -98,14 +101,14 @@ public final class GamePanel extends JPanel {
 
         MouseAdapter mouse = new MouseAdapter() {
             @Override public void mouseMoved(MouseEvent e) {
-                boolean hover = playAgainReady() && playAgainBtn.contains(e.getPoint());
+                boolean hover = buttonReady() && overlayBtn.contains(e.getPoint());
                 if (hover != btnHover) {
                     btnHover = hover;
                     setCursor(Cursor.getPredefinedCursor(hover ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR));
                 }
             }
             @Override public void mouseClicked(MouseEvent e) {
-                if (playAgainReady() && playAgainBtn.contains(e.getPoint())) {
+                if (buttonReady() && overlayBtn.contains(e.getPoint())) {
                     playAgain();
                 }
             }
@@ -127,8 +130,12 @@ public final class GamePanel extends JPanel {
         }
     }
 
-    private boolean playAgainReady() {
-        return world.finished && world.finishElapsed >= BUTTON_DELAY;
+    /** True when the victory "Play Again" or the death "Retry" button is clickable. */
+    private boolean buttonReady() {
+        if (world.finished) {
+            return world.finishElapsed >= BUTTON_DELAY;
+        }
+        return world.dead && world.killedByEnemy && world.deathElapsed >= DIED_BUTTON_DELAY;
     }
 
     /** Restart the level and reset view-only effects back to a fresh start. */
@@ -355,6 +362,13 @@ public final class GamePanel extends JPanel {
             g2.drawLine((int) pf.left(), (int) pf.top(), (int) pf.right(), (int) pf.top());
         }
 
+        // Enemies: spiky sea urchins.
+        for (Urchin u : world.urchins) {
+            double o = u.outerRadius();
+            if (u.x + o < vl || u.x - o > vr || u.y + o < vt || u.y - o > vb) continue;
+            drawUrchin(g2, u);
+        }
+
         // Finish: a simple flag pole on the dry platform.
         for (Finish gf : world.finishes) {
             if (!gf.overlaps(vl, vt, vr, vb)) continue;
@@ -379,6 +393,8 @@ public final class GamePanel extends JPanel {
         g2.translate(cx, cy);
         if (world.finished) {
             drawVictoryOverlay(g2, viewW, viewH);
+        } else if (world.dead && world.killedByEnemy) {
+            drawDiedOverlay(g2, viewW, viewH);
         } else if (world.dead) {
             // Darken toward the moment of respawn.
             int a = (int) Math.min(200, (world.deathElapsed / World.DEATH_DURATION) * 220);
@@ -573,25 +589,89 @@ public final class GamePanel extends JPanel {
         if (btnAppear <= 0) {
             return;
         }
-        int bw = Math.max(200, viewW / 6), bh = Math.max(50, viewH / 13);
-        playAgainBtn.setBounds(viewW / 2 - bw / 2, ty + fm.getDescent() + 40, bw, bh);
-        int ba = (int) (btnAppear * 255);
-        boolean hot = btnHover && playAgainReady();
-        g2.setColor(hot ? new Color(110, 235, 140, ba) : new Color(80, 200, 115, ba));
-        g2.fillRoundRect(playAgainBtn.x, playAgainBtn.y, bw, bh, 16, 16);
-        g2.setColor(new Color(235, 255, 240, (int) (btnAppear * 200)));
-        g2.setStroke(new BasicStroke(2f));
-        g2.drawRoundRect(playAgainBtn.x, playAgainBtn.y, bw, bh, 16, 16);
+        drawOverlayButton(g2, "Play Again", viewW, viewH, ty + fm.getDescent() + 40, btnAppear,
+                new Color(80, 200, 115), new Color(110, 235, 140), new Color(12, 32, 20));
+    }
 
-        String label = "Play Again";
+    /** Fixed-to-screen "YOU DIED" overlay (enemy deaths) with a Retry button. */
+    private void drawDiedOverlay(Graphics2D g2, int viewW, int viewH) {
+        double e = world.deathElapsed;
+        double appear = Math.min(1.0, e / 0.5);
+        g2.setColor(new Color(30, 4, 10, (int) (appear * 170)));
+        g2.fillRect(0, 0, viewW, viewH);
+
+        String title = "YOU DIED";
+        g2.setFont(new Font("SansSerif", Font.BOLD, Math.max(32, viewW / 12)));
+        FontMetrics fm = g2.getFontMetrics();
+        int tx = viewW / 2 - fm.stringWidth(title) / 2;
+        int ty = viewH / 2;
+        g2.setColor(new Color(0, 0, 0, (int) (appear * 180)));
+        g2.drawString(title, tx + 4, ty + 4);
+        g2.setColor(new Color(230, 60, 70, (int) (appear * 255)));
+        g2.drawString(title, tx, ty);
+
+        drawCenteredText(g2, "Pricked by a sea urchin", viewW, ty + fm.getDescent() + 26,
+                Math.max(16, viewW / 60), new Color(240, 190, 195, (int) (appear * 220)));
+
+        double btnAppear = Math.max(0, Math.min(1.0, (e - DIED_BUTTON_DELAY + 0.3) / 0.3));
+        drawOverlayButton(g2, "Retry", viewW, viewH, ty + fm.getDescent() + 56, btnAppear,
+                new Color(200, 70, 80), new Color(235, 100, 110), new Color(40, 8, 12));
+    }
+
+    /** A centred rounded button (sets {@link #overlayBtn}) with a key hint below it. */
+    private void drawOverlayButton(Graphics2D g2, String label, int viewW, int viewH, int y,
+                                   double appear, Color fill, Color hotFill, Color text) {
+        if (appear <= 0) {
+            return;
+        }
+        int bw = Math.max(200, viewW / 6), bh = Math.max(50, viewH / 13);
+        overlayBtn.setBounds(viewW / 2 - bw / 2, y, bw, bh);
+        int ba = (int) (appear * 255);
+        Color f = btnHover && buttonReady() ? hotFill : fill;
+        g2.setColor(new Color(f.getRed(), f.getGreen(), f.getBlue(), ba));
+        g2.fillRoundRect(overlayBtn.x, overlayBtn.y, bw, bh, 16, 16);
+        g2.setColor(new Color(255, 245, 245, (int) (appear * 200)));
+        g2.setStroke(new BasicStroke(2f));
+        g2.drawRoundRect(overlayBtn.x, overlayBtn.y, bw, bh, 16, 16);
+
         g2.setFont(new Font("SansSerif", Font.BOLD, Math.max(20, bh * 2 / 5)));
         FontMetrics bfm = g2.getFontMetrics();
-        g2.setColor(new Color(12, 32, 20, ba));
+        g2.setColor(new Color(text.getRed(), text.getGreen(), text.getBlue(), ba));
         g2.drawString(label, viewW / 2 - bfm.stringWidth(label) / 2,
-                playAgainBtn.y + (bh - bfm.getHeight()) / 2 + bfm.getAscent());
+                overlayBtn.y + (bh - bfm.getHeight()) / 2 + bfm.getAscent());
 
         drawCenteredText(g2, "Click or press Enter / R", viewW,
-                playAgainBtn.y + bh + 28, 14, new Color(170, 200, 220, (int) (btnAppear * 220)));
+                overlayBtn.y + bh + 28, 14, new Color(200, 200, 215, (int) (appear * 220)));
+    }
+
+    /** A sea urchin: dark spherical shell bristling with slowly swaying spines. */
+    private void drawUrchin(Graphics2D g2, Urchin u) {
+        double cx = u.x, cy = u.y, br = u.bodyRadius;
+        int spines = 22;
+        double sway = Math.sin(frame * 0.05) * 0.06;
+        g2.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        for (int i = 0; i < spines; i++) {
+            double ang = i * Math.PI * 2 / spines + sway;
+            // Alternate long / short spines; each one gently pulses.
+            double len = u.spineLength * (i % 2 == 0 ? 1.0 : 0.7)
+                    * (0.92 + 0.08 * Math.sin(frame * 0.08 + i));
+            int x1 = (int) (cx + Math.cos(ang) * br * 0.8), y1 = (int) (cy + Math.sin(ang) * br * 0.8);
+            int x2 = (int) (cx + Math.cos(ang) * (br + len)), y2 = (int) (cy + Math.sin(ang) * (br + len));
+            g2.setColor(new Color(60, 24, 72));
+            g2.drawLine(x1, y1, x2, y2);
+            g2.setColor(new Color(200, 120, 220));
+            g2.fillOval(x2 - 1, y2 - 1, 3, 3); // glinting tip
+        }
+        int d = (int) (br * 2);
+        g2.setPaint(new GradientPaint((float) (cx - br), (float) (cy - br), new Color(130, 60, 150),
+                (float) (cx + br), (float) (cy + br), new Color(40, 14, 52)));
+        g2.fillOval((int) (cx - br), (int) (cy - br), d, d);
+        g2.setColor(new Color(220, 170, 235, 110)); // highlight
+        g2.fillOval((int) (cx - br * 0.55), (int) (cy - br * 0.6), (int) (br * 0.6), (int) (br * 0.45));
+        // Mean little eyes so it reads as an enemy.
+        g2.setColor(new Color(255, 230, 120));
+        g2.fillOval((int) (cx - br * 0.45), (int) (cy - br * 0.05), 5, 5);
+        g2.fillOval((int) (cx + br * 0.2), (int) (cy - br * 0.05), 5, 5);
     }
 
     /** The cached sprite for a block, rendering it on first use. */
