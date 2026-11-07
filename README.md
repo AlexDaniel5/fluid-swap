@@ -4,11 +4,10 @@ A tiny 2D game in plain Java (Swing/Java2D — no build tools or dependencies).
 
 The main character is drawn as a **circle** but has a **box (AABB) hitbox**
 matching the circle's bounds. It collides with **box-shaped terrain**.
-Terrain blocks come in four visual flavors (collision is identical AABB for all):
-- `SOLID` — plain box
-- `CREST` — ridged top edge (hill cap / platform lip)
-- `BLOTCHY` — speckled rough ground
-- `GRASS` — dirt body with a grassy top and blades (the main platform terrain)
+Terrain blocks come in two visual flavors (collision is identical AABB for all):
+- `SOLID` — plain marble brickwork (the boundary walls)
+- `GRASS` — ornate marble ledge: gilded capstone, finials and hanging pendants
+  (the main platform terrain; the enum name predates the art style)
 
 The map also has **water** regions (non-solid). Movement speed depends on the
 medium the character is in:
@@ -92,13 +91,20 @@ straight up. It never blocks horizontal movement.
 
 ## Atmosphere, the pit & respawn
 
-`GamePanel` draws an ambient aquatic backdrop behind the world — a depth
-gradient (lit teal up top fading to a dark deep), slow drifting god-rays, and
-floating bubbles.
+**Art style.** Everything is pale, white-palace pixel art. `GamePanel` draws
+the world into a low-res canvas where one canvas pixel is one art pixel
+(`PX = 4` screen pixels), with antialiasing off, then scales it up with
+nearest-neighbour filtering. The camera snaps to that grid so nothing shimmers.
+Text is drawn the same way (rendered small, then scaled up). The palette is
+ivory marble, lavender-grey shadow, a touch of pale gold, and the black void as
+the only deep tone; the player is a dark orb so it stands out against the white.
+
+Behind the world: a dithered sky gradient, two parallax layers of distant white
+spires, soft light shafts and drifting motes of light.
 
 Below the squares is a bottomless **pit** — a full-width lethal `Hazard` band.
-Falling into it kills the player: `World.dead` latches, a death burst (ring +
-scattering bubbles) plays while the screen darkens, and after `DEATH_DURATION`
+Falling into it kills the player: `World.dead` latches, a death burst (dotted ring +
+scattering shards) plays while the screen darkens, and after `DEATH_DURATION`
 the player **respawns** in the spawn square with motion and medium state reset.
 Input is ignored during the sequence, and a short fade-in plays on respawn.
 Death uses the same trigger-region pattern as the finish and never fires once

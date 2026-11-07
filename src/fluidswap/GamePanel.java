@@ -1,6 +1,5 @@
 package fluidswap;
 
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Rectangle;
@@ -9,7 +8,6 @@ import java.awt.event.MouseEvent;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.FontMetrics;
-import java.awt.GradientPaint;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Polygon;
@@ -38,11 +36,8 @@ public final class GamePanel extends JPanel {
     private boolean left, right, jump, down;
     private long frame; // animation counter for the waterfalls
 
-    // Blocks are static, so each is rendered once into a sprite and blitted
-    // every frame instead of re-drawing its speckles and grass blades.
-    // BLOCK_PAD is transparent space around the box: grass blades poke up to
-    // 10 px above the top edge, and outline strokes spill 1 px past the box.
-    private static final int BLOCK_PAD = 12;
+    // Blocks are static, so each is rendered once into a sprite (see
+    // renderBlockSprite) and blitted every frame.
     private final Map<Block, BufferedImage> blockSprites = new IdentityHashMap<>();
     // Extra world-space margin when culling against the view, so things that
     // draw slightly outside their bounds (blades, glows) don't pop at the edge.
@@ -84,7 +79,7 @@ public final class GamePanel extends JPanel {
     public GamePanel(World world) {
         this.world = world;
         setPreferredSize(new Dimension(VIEW_WIDTH, VIEW_HEIGHT));
-        setBackground(new Color(24, 26, 34));
+        setBackground(new Color(246, 245, 250));
         setFocusable(true);
 
         addKeyListener(new KeyAdapter() {
@@ -262,20 +257,6 @@ public final class GamePanel extends JPanel {
         droplets.add(d);
     }
 
-    /** Draw the flying splash droplets. */
-    private void drawSplash(Graphics2D g2) {
-        for (Droplet d : droplets) {
-            int a = (int) (230 * Math.min(1.0, d.life / d.maxLife * 2));
-            int s = (int) Math.round(d.size);
-            // Stretch along the direction of travel for a streaky water look.
-            int sy = (int) Math.round(d.size * (1 + Math.min(1.5, Math.abs(d.vy) / 600)));
-            g2.setColor(new Color(170, 225, 255, a));
-            g2.fillOval((int) d.x - s / 2, (int) d.y - sy / 2, s, sy);
-            g2.setColor(new Color(240, 252, 255, a));
-            g2.fillRect((int) d.x - s / 4, (int) d.y - sy / 3, Math.max(1, s / 3), Math.max(1, s / 3));
-        }
-    }
-
     /** Ease the camera toward keeping the player centered, clamped to the world. */
     private void updateCamera(double dt) {
         int viewW = getWidth() > 0 ? getWidth() : VIEW_WIDTH;
@@ -304,108 +285,136 @@ public final class GamePanel extends JPanel {
         return Math.max(0, Math.min(worldSize - viewSize, v));
     }
 
+    // ------------------------------------------------------------------
+    // Rendering — pale "white palace" pixel art.
+    //
+    // The world is drawn into a small canvas where one canvas pixel is one
+    // art pixel (PX screen pixels wide), with antialiasing off, then blown up
+    // with nearest-neighbour scaling so every edge is a crisp, chunky pixel.
+    // All world drawing below works in grid units (world px / PX).
+    // ------------------------------------------------------------------
+
+    /** Screen pixels per art pixel. */
+    private static final int PX = 4;
+
+    // Palette: ivory marble, cool lavender-grey shadow, a touch of pale gold,
+    // and the black void as the only deep tone.
+    private static final Color OUTLINE      = new Color(86, 82, 106);
+    private static final Color MARBLE_HI    = new Color(253, 252, 249);
+    private static final Color MARBLE       = new Color(238, 236, 238);
+    private static final Color MARBLE_MID   = new Color(218, 216, 226);
+    private static final Color MARBLE_SHADE = new Color(190, 188, 206);
+    private static final Color GOLD         = new Color(228, 206, 142);
+    private static final Color GOLD_DARK    = new Color(178, 150, 96);
+    private static final Color VOID         = new Color(16, 14, 24);
+    private static final Color VOID_EDGE    = new Color(44, 40, 60);
+    private static final Color SKY_TOP      = new Color(246, 245, 250);
+    private static final Color SKY_BOTTOM   = new Color(204, 202, 220);
+    private static final Color SPIRE_FAR    = new Color(226, 224, 236);
+    private static final Color SPIRE_NEAR   = new Color(212, 210, 226);
+    private static final Color SPIRE_NEAR_HI = new Color(234, 233, 242);
+
+    // 4x4 ordered-dither thresholds (0..15) for the stepped sky gradient.
+    private static final int[][] BAYER = {
+        {0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}
+    };
+
+    // Blocks are static, so each is rendered once into a grid-sized sprite.
+    // BLOCK_PAD (grid px) leaves room for trim that pokes past the box.
+    private static final int BLOCK_PAD = 4;
+
+    private BufferedImage canvas;   // low-res world canvas
+    private BufferedImage skyImage; // cached dithered gradient (per canvas size)
+
+    /** World px -> grid px (floor, so adjacent shapes tile without gaps). */
+    private static int gx(double world) {
+        return (int) Math.floor(world / PX);
+    }
+
     @Override
     protected void paintComponent(Graphics g) {
         super.paintComponent(g);
-        Graphics2D g2 = (Graphics2D) g;
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
         int viewW = getWidth() > 0 ? getWidth() : VIEW_WIDTH;
         int viewH = getHeight() > 0 ? getHeight() : VIEW_HEIGHT;
+        int lw = (viewW + PX - 1) / PX, lh = (viewH + PX - 1) / PX;
+        if (canvas == null || canvas.getWidth() != lw || canvas.getHeight() != lh) {
+            canvas = new BufferedImage(lw, lh, BufferedImage.TYPE_INT_RGB);
+            skyImage = null;
+        }
 
-        // Immersive underwater backdrop (screen space, behind the world).
-        drawUnderwaterBackdrop(g2, viewW, viewH);
+        // Camera snapped to the art-pixel grid so nothing shimmers as it scrolls.
+        int camGX = (int) Math.round(camX / PX);
+        int camGY = (int) Math.round(camY / PX);
 
-        // Shift the world under the camera so the player stays centered.
-        int cx = (int) Math.round(camX);
-        int cy = (int) Math.round(camY);
-        g2.translate(-cx, -cy);
+        Graphics2D c = canvas.createGraphics();
+        c.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+        c.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
+        drawBackdrop(c, lw, lh, camGX, camGY);
 
-        // World-space view rectangle for culling off-screen terrain.
-        double vl = cx - CULL_MARGIN, vt = cy - CULL_MARGIN;
-        double vr = cx + viewW + CULL_MARGIN, vb = cy + viewH + CULL_MARGIN;
+        c.translate(-camGX, -camGY);
+        // World-space view rectangle for culling.
+        double vl = camGX * PX - CULL_MARGIN, vt = camGY * PX - CULL_MARGIN;
+        double vr = camGX * PX + viewW + CULL_MARGIN, vb = camGY * PX + viewH + CULL_MARGIN;
 
+        for (Waterfall f : world.waterfalls) {
+            if (f.overlaps(vl, vt, vr, vb)) drawWaterfall(c, f);
+        }
+        for (Water w : world.waters) {
+            if (w.overlaps(vl, vt, vr, vb)) drawWater(c, w);
+        }
         for (Block b : world.blocks) {
             if (b.overlaps(vl, vt, vr, vb)) {
-                g2.drawImage(blockSprite(b), (int) b.x - BLOCK_PAD, (int) b.y - BLOCK_PAD, null);
+                c.drawImage(blockSprite(b), gx(b.x) - BLOCK_PAD, gx(b.y) - BLOCK_PAD, null);
             }
         }
-
-        // Water regions (drawn translucent, under the player).
-        for (Water w : world.waters) {
-            if (!w.overlaps(vl, vt, vr, vb)) continue;
-            g2.setColor(new Color(60, 140, 230, 120));
-            g2.fillRect((int) w.x, (int) w.y, (int) w.width, (int) w.height);
-            g2.setColor(new Color(120, 190, 255, 160));
-            g2.setStroke(new BasicStroke(2f));
-            g2.drawLine((int) w.left(), (int) w.top(), (int) w.right(), (int) w.top());
-        }
-
-        // Hazards: the deadly abyss trench (dark water + jagged spikes).
         for (Hazard h : world.hazards) {
-            if (!h.overlaps(vl, vt, vr, vb)) continue;
-            drawHazard(g2, h);
+            if (h.overlaps(vl, vt, vr, vb)) drawHazard(c, h);
         }
-
-        // Waterfalls: translucent column with animated downward streaks.
-        for (Waterfall f : world.waterfalls) {
-            if (!f.overlaps(vl, vt, vr, vb)) continue;
-            drawWaterfall(g2, f);
-        }
-
-        // One-way platforms: thin black lines (swim up through, land on top).
-        g2.setColor(new Color(20, 20, 24));
-        g2.setStroke(new BasicStroke(3f));
         for (Platform pf : world.platforms) {
-            // Zero height, so test it as a line: horizontal extent + its y.
             if (pf.right() < vl || pf.left() > vr || pf.top() < vt || pf.top() > vb) continue;
-            g2.drawLine((int) pf.left(), (int) pf.top(), (int) pf.right(), (int) pf.top());
+            drawPlatform(c, pf);
         }
-
-        // Enemies: spiky sea urchins.
         for (Urchin u : world.urchins) {
             double o = u.outerRadius();
             if (u.x + o < vl || u.x - o > vr || u.y + o < vt || u.y - o > vb) continue;
-            drawUrchin(g2, u);
+            drawUrchin(c, u);
         }
-
-        // Finish: a simple flag pole on the dry platform.
         for (Finish gf : world.finishes) {
-            if (!gf.overlaps(vl, vt, vr, vb)) continue;
-            drawFinish(g2, gf);
+            if (gf.overlaps(vl, vt, vr, vb)) drawFinish(c, gf);
         }
 
-        // Player: circle sprite (hidden mid-death, replaced by a bubble burst).
         Player p = world.player;
         if (!world.dead) {
-            int d = (int) (p.radius * 2);
-            g2.setColor(new Color(90, 200, 255));
-            g2.fillOval((int) (p.pos.x - p.radius), (int) (p.pos.y - p.radius), d, d);
-            g2.setColor(new Color(220, 245, 255));
-            g2.setStroke(new BasicStroke(2f));
-            g2.drawOval((int) (p.pos.x - p.radius), (int) (p.pos.y - p.radius), d, d);
+            drawPlayer(c, p);
         } else {
-            drawDeathBurst(g2);
+            drawDeathBurst(c);
         }
-        drawSplash(g2);
+        drawSplash(c);
+        c.dispose();
 
-        // HUD and overlays are fixed to the screen: undo the camera.
-        g2.translate(cx, cy);
+        // Blow the canvas up to the window with hard nearest-neighbour pixels.
+        Graphics2D g2 = (Graphics2D) g;
+        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+        g2.drawImage(canvas, 0, 0, lw * PX, lh * PX, null);
+
+        // HUD and overlays (screen space, but still drawn on the pixel grid).
         if (world.finished) {
             drawVictoryOverlay(g2, viewW, viewH);
         } else if (world.dead && world.killedByEnemy) {
             drawDiedOverlay(g2, viewW, viewH);
         } else if (world.dead) {
-            // Darken toward the moment of respawn.
-            int a = (int) Math.min(200, (world.deathElapsed / World.DEATH_DURATION) * 220);
-            g2.setColor(new Color(4, 8, 16, a));
+            // Sink into the void toward the moment of respawn.
+            int a = (int) Math.min(210, (world.deathElapsed / World.DEATH_DURATION) * 230);
+            g2.setColor(withAlpha(VOID, a));
             g2.fillRect(0, 0, viewW, viewH);
-            drawCenteredText(g2, "Lost to the depths…", viewW, viewH / 2,
-                    Math.max(18, viewW / 36), new Color(150, 210, 240, a + 40));
+            pixelText(g2, "Lost to the depths…", viewW / 2, viewH / 2, 12, 3,
+                    withAlpha(MARBLE_HI, Math.min(255, a + 40)), null, true);
         } else {
-            if (respawnFade > 0) { // fading back in after respawn
-                int a = (int) ((respawnFade / RESPAWN_FADE) * 170);
-                g2.setColor(new Color(4, 8, 16, a));
+            if (respawnFade > 0) {
+                int a = (int) ((respawnFade / RESPAWN_FADE) * 190);
+                g2.setColor(withAlpha(VOID, a));
                 g2.fillRect(0, 0, viewW, viewH);
             }
             String medium = switch (p.medium()) {
@@ -414,264 +423,323 @@ public final class GamePanel extends JPanel {
                 case LAND -> "LAND (slow)";
                 case AIR -> "AIR (medium)";
             };
-            g2.setColor(new Color(150, 160, 180));
-            g2.drawString("Move: A/D or ←/→   Jump/Swim/Climb up: Space/W/↑   Climb down: S/↓", 12, 20);
-            g2.drawString("Medium: " + medium + "   speed=" + (int) world.activeMoveSpeed(), 12, 38);
+            Color hud = new Color(104, 100, 128);
+            pixelText(g2, "Move: A/D or ←/→   Jump/Swim/Climb up: Space/W/↑   Climb down: S/↓",
+                    12, 22, 9, 2, hud, MARBLE_HI, false);
+            pixelText(g2, "Medium: " + medium + "   speed=" + (int) world.activeMoveSpeed(),
+                    12, 44, 9, 2, hud, MARBLE_HI, false);
         }
     }
 
-    /** Draw a string horizontally centered at the given screen y (baseline). */
-    private void drawCenteredText(Graphics2D g2, String s, int viewW, int y, int size, Color c) {
-        g2.setFont(new Font("SansSerif", Font.BOLD, size));
-        FontMetrics fm = g2.getFontMetrics();
-        g2.setColor(c);
-        g2.drawString(s, viewW / 2 - fm.stringWidth(s) / 2, y);
+    private static Color withAlpha(Color c, int a) {
+        return new Color(c.getRed(), c.getGreen(), c.getBlue(), Math.max(0, Math.min(255, a)));
     }
 
-    /** Translucent blue column with streaks that scroll downward over time. */
-    private void drawWaterfall(Graphics2D g2, Waterfall f) {
-        int x = (int) f.x, y = (int) f.y, w = (int) f.width, h = (int) f.height;
+    private static Color lerp(Color a, Color b, double t) {
+        return new Color(
+                (int) Math.round(a.getRed() + (b.getRed() - a.getRed()) * t),
+                (int) Math.round(a.getGreen() + (b.getGreen() - a.getGreen()) * t),
+                (int) Math.round(a.getBlue() + (b.getBlue() - a.getBlue()) * t));
+    }
 
-        g2.setColor(new Color(70, 170, 240, 110));
-        g2.fillRect(x, y, w, h);
+    /** Cheap stable integer hash for procedural layout. */
+    private static int hash(int i, int seed) {
+        int h = i * 0x27d4eb2d ^ seed * 0x165667b1;
+        h ^= h >>> 15;
+        h *= 0x85ebca6b;
+        h ^= h >>> 13;
+        return h & 0x7fffffff;
+    }
 
-        // Falling streaks: thin vertical highlights whose phase scrolls down.
-        g2.setStroke(new BasicStroke(2f));
-        Random r = new Random(((long) x << 16) ^ y); // stable lane layout per fall
-        int lanes = Math.max(3, w / 14);
-        int scroll = (int) ((frame * 6) % 48); // downward motion, wraps every 48px
-        for (int i = 0; i < lanes; i++) {
-            int lx = x + 4 + r.nextInt(Math.max(1, w - 8));
-            int alpha = 120 + r.nextInt(100);
-            g2.setColor(new Color(200, 235, 255, alpha));
-            // Dashes marching downward within the column.
-            for (int sy = y - 48 + (scroll + r.nextInt(48)) % 48; sy < y + h; sy += 48) {
-                int y1 = Math.max(y, sy);
-                int y2 = Math.min(y + h, sy + 26);
-                if (y2 > y1) {
-                    g2.drawLine(lx, y1, lx, y2);
+    /** Fill a filled pixel disc centred at (cx, cy) in grid units. */
+    private static void disc(Graphics2D g, double cx, double cy, double r) {
+        int x0 = (int) Math.floor(cx - r), x1 = (int) Math.ceil(cx + r);
+        int y0 = (int) Math.floor(cy - r), y1 = (int) Math.ceil(cy + r);
+        double r2 = r * r;
+        for (int y = y0; y <= y1; y++) {
+            int run = -1;
+            for (int x = x0; x <= x1 + 1; x++) {
+                double dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+                boolean in = x <= x1 && dx * dx + dy * dy <= r2;
+                if (in && run < 0) run = x;
+                if (!in && run >= 0) {
+                    g.fillRect(run, y, x - run, 1);
+                    run = -1;
                 }
             }
         }
-
-        // Bright lip where the water pours over the top.
-        g2.setColor(new Color(220, 245, 255, 200));
-        g2.setStroke(new BasicStroke(3f));
-        g2.drawLine(x, y, x + w, y);
     }
 
-    /** Ambient underwater backdrop: depth gradient, god rays, drifting bubbles. */
-    private void drawUnderwaterBackdrop(Graphics2D g2, int viewW, int viewH) {
-        // Depth gradient: lit teal shallows up top fading to dark deep below.
-        g2.setPaint(new GradientPaint(0, 0, new Color(28, 72, 104), 0, viewH, new Color(8, 18, 34)));
-        g2.fillRect(0, 0, viewW, viewH);
+    /**
+     * Text rendered small without antialiasing, then scaled up by {@code scale}
+     * so it reads as pixel lettering. (x, baseline) are screen coordinates; x is
+     * the centre when {@code centered}, else the left edge.
+     */
+    private void pixelText(Graphics2D g, String s, int x, int baseline, int size, int scale,
+                           Color color, Color shadow, boolean centered) {
+        Font f = new Font(Font.SANS_SERIF, Font.BOLD, size);
+        FontMetrics fm = getFontMetrics(f);
+        int w = fm.stringWidth(s) + 2, h = fm.getAscent() + fm.getDescent() + 2;
+        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D ig = img.createGraphics();
+        ig.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
+                RenderingHints.VALUE_TEXT_ANTIALIAS_OFF);
+        ig.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS,
+                RenderingHints.VALUE_FRACTIONALMETRICS_OFF);
+        ig.setFont(f);
+        if (shadow != null) {
+            ig.setColor(shadow);
+            ig.drawString(s, 1, fm.getAscent() + 1);
+        }
+        ig.setColor(color);
+        ig.drawString(s, 0, fm.getAscent());
+        ig.dispose();
+        int left = centered ? x - (w * scale) / 2 : x;
+        g.drawImage(img, left, baseline - fm.getAscent() * scale, w * scale, h * scale, null);
+    }
 
-        // Soft god rays slanting down from the surface, drifting slowly.
-        double t = frame * 0.01;
-        for (int i = 0; i < 5; i++) {
-            int xTop = (int) (i * viewW / 4.0 + Math.sin(t + i) * 40);
+    // ---------------------------------------------------------------- backdrop
+
+    /** Pale palace sky: dithered gradient, parallax spires, light shafts, motes. */
+    private void drawBackdrop(Graphics2D g, int lw, int lh, int camGX, int camGY) {
+        if (skyImage == null) {
+            skyImage = renderSky(lw, lh);
+        }
+        g.drawImage(skyImage, 0, 0, null);
+
+        // Soft light shafts slanting down from above.
+        double t = frame * 0.006;
+        for (int i = 0; i < 4; i++) {
+            int xTop = (int) (i * lw / 3.5 + Math.sin(t + i * 1.7) * 10) - camGX / 20;
             Polygon ray = new Polygon();
             ray.addPoint(xTop, 0);
-            ray.addPoint(xTop + 60, 0);
-            ray.addPoint(xTop + 60 + 160, viewH);
-            ray.addPoint(xTop + 160, viewH);
-            g2.setColor(new Color(150, 220, 255, 16));
-            g2.fillPolygon(ray);
+            ray.addPoint(xTop + 14, 0);
+            ray.addPoint(xTop + 14 + 50, lh);
+            ray.addPoint(xTop + 50, lh);
+            g.setColor(new Color(255, 255, 255, 34));
+            g.fillPolygon(ray);
         }
 
-        // Drifting ambient bubbles (screen-space parallax).
-        Random r = new Random(7);
-        for (int i = 0; i < 40; i++) {
-            int bx = r.nextInt(viewW);
-            int span = viewH + 80;
-            double speed = 12 + r.nextInt(30);
-            double ph = (r.nextDouble() * span + frame * speed * 0.05) % span;
-            int by = (int) (viewH - ph);
-            int s = 2 + r.nextInt(4);
-            g2.setColor(new Color(180, 220, 255, 40 + r.nextInt(40)));
-            g2.fillOval(bx, by, s, s);
-        }
-    }
+        // Two layers of distant palace spires; the nearer one scrolls faster.
+        drawSpires(g, lw, lh, camGX * 0.12, camGY * 0.06, 11, 17, 30, 95, SPIRE_FAR, null, false);
+        // Low mist between the layers.
+        g.setColor(new Color(255, 255, 255, 60));
+        g.fillRect(0, lh - 34, lw, 34);
+        drawSpires(g, lw, lh, camGX * 0.28, camGY * 0.14, 23, 34, 20, 70,
+                SPIRE_NEAR, SPIRE_NEAR_HI, true);
+        g.setColor(new Color(255, 255, 255, 70));
+        g.fillRect(0, lh - 14, lw, 14);
 
-    /** The deadly abyss trench: dark water with jagged spikes along its rim. */
-    private void drawHazard(Graphics2D g2, Hazard h) {
-        int x = (int) h.x, y = (int) h.y, w = (int) h.width, hh = (int) h.height;
-        g2.setColor(new Color(10, 14, 22, 190));
-        g2.fillRect(x, y, w, hh);
-        // Ominous glow line along the mouth of the trench.
-        g2.setColor(new Color(130, 50, 70, 110));
-        g2.fillRect(x, y, w, 8);
-        // Jagged spikes jutting up from the rim.
-        int sp = 22;
-        for (int sx = x; sx < x + w; sx += sp) {
-            Polygon tri = new Polygon();
-            tri.addPoint(sx, y);
-            tri.addPoint(sx + sp / 2, y - 18);
-            tri.addPoint(sx + sp, y);
-            g2.setColor(new Color(40, 46, 58));
-            g2.fillPolygon(tri);
-            g2.setColor(new Color(70, 78, 92));
-            g2.drawPolygon(tri);
+        // Drifting motes of light, rising slowly with a gentle sway.
+        for (int i = 0; i < 46; i++) {
+            int h1 = hash(i, 7);
+            int span = lh + 20;
+            double speed = 4 + (h1 % 9);
+            double ph = ((h1 >>> 4) % span + frame * speed * 0.02) % span;
+            int my = (int) (lh + 10 - ph);
+            int mx = (int) (((h1 >>> 9) % (lw + 40)) - 20
+                    + Math.sin(frame * 0.02 + i) * 3 - camGX * 0.2 % (lw + 40));
+            mx = Math.floorMod(mx, lw + 40) - 20;
+            boolean big = h1 % 5 == 0;
+            int a = 120 + (int) (80 * Math.sin(frame * 0.05 + i * 2.3));
+            g.setColor(new Color(255, 255, 255, Math.max(30, Math.min(255, a))));
+            if (big) { // little twinkle cross
+                g.fillRect(mx - 1, my, 3, 1);
+                g.fillRect(mx, my - 1, 1, 3);
+            } else {
+                g.fillRect(mx, my, 1, 1);
+            }
         }
     }
 
-    /** Death effect: an expanding ring and a scatter of bubbles bursting out. */
-    private void drawDeathBurst(Graphics2D g2) {
-        double e = world.deathElapsed;
-        int cx = (int) world.deathX, cy = (int) world.deathY;
-
-        int rad = (int) (e * 260);
-        int ringA = (int) Math.max(0, 200 - e * 220);
-        if (ringA > 0) {
-            g2.setStroke(new BasicStroke(3f));
-            g2.setColor(new Color(220, 245, 255, ringA));
-            g2.drawOval(cx - rad, cy - rad, rad * 2, rad * 2);
+    /** Stepped, ordered-dithered vertical gradient from SKY_TOP to SKY_BOTTOM. */
+    private static BufferedImage renderSky(int lw, int lh) {
+        BufferedImage img = new BufferedImage(lw, lh, BufferedImage.TYPE_INT_RGB);
+        final int bands = 7;
+        int[] band = new int[bands + 1];
+        for (int i = 0; i <= bands; i++) {
+            band[i] = lerp(SKY_TOP, SKY_BOTTOM, i / (double) bands).getRGB();
         }
-        Random r = new Random(99);
-        for (int i = 0; i < 26; i++) {
-            double ang = r.nextDouble() * Math.PI * 2;
-            double dist = (40 + r.nextDouble() * 160) * e;
-            int bx = (int) (cx + Math.cos(ang) * dist);
-            int by = (int) (cy + Math.sin(ang) * dist - e * 60); // drift upward
-            int ba = (int) Math.max(0, 200 - e * 160);
-            if (ba <= 0) continue;
-            int s = 3 + r.nextInt(6);
-            g2.setColor(new Color(210, 240, 255, ba));
-            g2.fillOval(bx, by, s, s);
+        for (int y = 0; y < lh; y++) {
+            double level = y / (double) Math.max(1, lh - 1) * bands;
+            int b = Math.min(bands - 1, (int) level);
+            double frac = level - b;
+            for (int x = 0; x < lw; x++) {
+                boolean next = BAYER[y & 3][x & 3] < frac * 16;
+                img.setRGB(x, y, next ? band[b + 1] : band[b]);
+            }
+        }
+        return img;
+    }
+
+    /** A repeating skyline of slender towers with pointed roofs. */
+    private static void drawSpires(Graphics2D g, int lw, int lh, double offX, double offY,
+                                   int seed, int spacing, int minH, int maxH,
+                                   Color body, Color hi, boolean detailed) {
+        int base = lh + 24 - (int) offY;
+        int first = (int) Math.floor(offX / spacing) - 2;
+        int last = first + lw / spacing + 4;
+        for (int i = first; i <= last; i++) {
+            int h = hash(i, seed);
+            int x = (int) Math.round(i * spacing - offX) + (h % 7) - 3;
+            int w = 4 + (h >>> 3) % 6;
+            int height = minH + (h >>> 7) % (maxH - minH);
+            int top = base - height;
+            g.setColor(body);
+            g.fillRect(x, top, w, base - top);
+            // Pointed roof stepping in one pixel per row (two for wider towers).
+            int roof = w / 2 + (h >>> 11) % 6 + 2;
+            for (int k = 0; k < roof; k++) {
+                int rw = Math.max(1, w - 2 * (int) Math.round(k * (w / 2.0) / roof));
+                g.fillRect(x + (w - rw) / 2, top - k - 1, rw, 1);
+            }
+            g.fillRect(x + w / 2, top - roof - 3, 1, 3); // needle tip
+            if (detailed) {
+                g.setColor(hi);
+                g.fillRect(x, top, 1, base - top);           // lit edge
+                g.fillRect(x - 1, top + 6, w + 2, 1);        // cornice band
+                g.fillRect(x - 1, top + 18, w + 2, 1);
+                if (w >= 6) {                                 // tall arched windows
+                    g.setColor(new Color(200, 198, 216));
+                    for (int wy = top + 9; wy < base - 8; wy += 13) {
+                        g.fillRect(x + w / 2 - 1, wy + 1, 2, 6);
+                        g.fillRect(x + w / 2, wy, 1, 1);
+                    }
+                }
+            }
         }
     }
 
-    /** A simple flag pole marking the finish; the flag turns green on win. */
-    private void drawFinish(Graphics2D g2, Finish f) {
-        int poleX = (int) f.left() + 20;
-        int baseY = (int) f.bottom();
-        int topY = (int) f.top() + 10;
+    // ---------------------------------------------------------------- terrain
 
-        // Pole with a small finial on top.
-        g2.setColor(new Color(225, 228, 235));
-        g2.setStroke(new BasicStroke(5f));
-        g2.drawLine(poleX, baseY, poleX, topY);
-        g2.setColor(new Color(245, 215, 90));
-        g2.fillOval(poleX - 6, topY - 12, 12, 12);
+    /** Pale luminous pool with a rippling bright surface and drifting glints. */
+    private void drawWater(Graphics2D g, Water w) {
+        int x0 = gx(w.left()), x1 = gx(w.right()), y0 = gx(w.top()), y1 = gx(w.bottom());
+        int ww = x1 - x0, hh = y1 - y0;
+        g.setColor(new Color(170, 214, 234, 120));
+        g.fillRect(x0, y0, ww, hh);
+        // Slightly denser water toward the bottom.
+        g.setColor(new Color(150, 196, 226, 50));
+        g.fillRect(x0, y0 + hh / 2, ww, hh - hh / 2);
+        // Faint glassy sides.
+        g.setColor(new Color(240, 250, 255, 110));
+        g.fillRect(x0, y0, 1, hh);
+        g.fillRect(x1 - 1, y0, 1, hh);
 
-        // Triangular flag near the top, gently waving.
-        int flagW = 54, flagH = 34;
-        int wave = (int) (Math.sin(frame * 0.12) * 4);
-        Polygon flag = new Polygon();
-        flag.addPoint(poleX, topY + 4);
-        flag.addPoint(poleX + flagW + wave, topY + 4 + flagH / 2);
-        flag.addPoint(poleX, topY + 4 + flagH);
-        g2.setColor(world.finished ? new Color(90, 220, 120) : new Color(70, 190, 230));
-        g2.fillPolygon(flag);
-        g2.setColor(new Color(255, 255, 255, 140));
-        g2.setStroke(new BasicStroke(2f));
-        g2.drawPolygon(flag);
-    }
-
-    /** Fixed-to-screen "LEVEL COMPLETE!" overlay: a dim wash + a brief title. */
-    private void drawVictoryOverlay(Graphics2D g2, int viewW, int viewH) {
-        double appear = Math.min(1.0, world.finishElapsed / 0.4);
-        g2.setColor(new Color(6, 12, 22, (int) (appear * 150)));
-        g2.fillRect(0, 0, viewW, viewH);
-
-        String title = "LEVEL COMPLETE!";
-        g2.setFont(new Font("SansSerif", Font.BOLD, Math.max(28, viewW / 16)));
-        FontMetrics fm = g2.getFontMetrics();
-        int tx = viewW / 2 - fm.stringWidth(title) / 2;
-        int ty = viewH / 2;
-        g2.setColor(new Color(0, 0, 0, (int) (appear * 160)));
-        g2.drawString(title, tx + 3, ty + 3);
-        g2.setColor(new Color(235, 250, 255, (int) (appear * 255)));
-        g2.drawString(title, tx, ty);
-
-        // "Play Again" button, fading in a beat after the title.
-        double btnAppear = Math.max(0, Math.min(1.0, (world.finishElapsed - 0.3) / 0.3));
-        if (btnAppear <= 0) {
-            return;
+        // Drifting glints inside the pool.
+        for (int i = 0; i < Math.max(4, ww * hh / 500); i++) {
+            int h = hash(i, x0 * 31 + y0);
+            int gy = y0 + 4 + (h % Math.max(1, hh - 6));
+            int gxp = x0 + 2 + (int) (((h >>> 8) + frame * (0.08 + (h % 5) * 0.03)) % Math.max(1, ww - 6));
+            int a = 60 + (int) (50 * Math.sin(frame * 0.04 + i));
+            g.setColor(new Color(255, 255, 255, Math.max(10, a)));
+            g.fillRect(gxp, gy, 3 + h % 3, 1);
         }
-        drawOverlayButton(g2, "Play Again", viewW, viewH, ty + fm.getDescent() + 40, btnAppear,
-                new Color(80, 200, 115), new Color(110, 235, 140), new Color(12, 32, 20));
-    }
 
-    /** Fixed-to-screen "YOU DIED" overlay (enemy deaths) with a Retry button. */
-    private void drawDiedOverlay(Graphics2D g2, int viewW, int viewH) {
-        double e = world.deathElapsed;
-        double appear = Math.min(1.0, e / 0.5);
-        g2.setColor(new Color(30, 4, 10, (int) (appear * 170)));
-        g2.fillRect(0, 0, viewW, viewH);
-
-        String title = "YOU DIED";
-        g2.setFont(new Font("SansSerif", Font.BOLD, Math.max(32, viewW / 12)));
-        FontMetrics fm = g2.getFontMetrics();
-        int tx = viewW / 2 - fm.stringWidth(title) / 2;
-        int ty = viewH / 2;
-        g2.setColor(new Color(0, 0, 0, (int) (appear * 180)));
-        g2.drawString(title, tx + 4, ty + 4);
-        g2.setColor(new Color(230, 60, 70, (int) (appear * 255)));
-        g2.drawString(title, tx, ty);
-
-        drawCenteredText(g2, "Pricked by a sea urchin", viewW, ty + fm.getDescent() + 26,
-                Math.max(16, viewW / 60), new Color(240, 190, 195, (int) (appear * 220)));
-
-        double btnAppear = Math.max(0, Math.min(1.0, (e - DIED_BUTTON_DELAY + 0.3) / 0.3));
-        drawOverlayButton(g2, "Retry", viewW, viewH, ty + fm.getDescent() + 56, btnAppear,
-                new Color(200, 70, 80), new Color(235, 100, 110), new Color(40, 8, 12));
-    }
-
-    /** A centred rounded button (sets {@link #overlayBtn}) with a key hint below it. */
-    private void drawOverlayButton(Graphics2D g2, String label, int viewW, int viewH, int y,
-                                   double appear, Color fill, Color hotFill, Color text) {
-        if (appear <= 0) {
-            return;
+        // Surface: bright line with little travelling wave crests.
+        g.setColor(new Color(226, 244, 252, 200));
+        g.fillRect(x0, y0 + 1, ww, 1);
+        g.setColor(new Color(255, 255, 255, 240));
+        for (int x = x0; x < x1; x++) {
+            double wv = Math.sin((x + frame * 0.12) * 0.45) + Math.sin((x - frame * 0.07) * 0.21);
+            g.fillRect(x, wv > 1.1 ? y0 - 1 : y0, 1, 1);
         }
-        int bw = Math.max(200, viewW / 6), bh = Math.max(50, viewH / 13);
-        overlayBtn.setBounds(viewW / 2 - bw / 2, y, bw, bh);
-        int ba = (int) (appear * 255);
-        Color f = btnHover && buttonReady() ? hotFill : fill;
-        g2.setColor(new Color(f.getRed(), f.getGreen(), f.getBlue(), ba));
-        g2.fillRoundRect(overlayBtn.x, overlayBtn.y, bw, bh, 16, 16);
-        g2.setColor(new Color(255, 245, 245, (int) (appear * 200)));
-        g2.setStroke(new BasicStroke(2f));
-        g2.drawRoundRect(overlayBtn.x, overlayBtn.y, bw, bh, 16, 16);
-
-        g2.setFont(new Font("SansSerif", Font.BOLD, Math.max(20, bh * 2 / 5)));
-        FontMetrics bfm = g2.getFontMetrics();
-        g2.setColor(new Color(text.getRed(), text.getGreen(), text.getBlue(), ba));
-        g2.drawString(label, viewW / 2 - bfm.stringWidth(label) / 2,
-                overlayBtn.y + (bh - bfm.getHeight()) / 2 + bfm.getAscent());
-
-        drawCenteredText(g2, "Click or press Enter / R", viewW,
-                overlayBtn.y + bh + 28, 14, new Color(200, 200, 215, (int) (appear * 220)));
     }
 
-    /** A sea urchin: dark spherical shell bristling with slowly swaying spines. */
-    private void drawUrchin(Graphics2D g2, Urchin u) {
-        double cx = u.x, cy = u.y, br = u.bodyRadius;
-        int spines = 22;
-        double sway = Math.sin(frame * 0.05) * 0.06;
-        g2.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        for (int i = 0; i < spines; i++) {
-            double ang = i * Math.PI * 2 / spines + sway;
-            // Alternate long / short spines; each one gently pulses.
-            double len = u.spineLength * (i % 2 == 0 ? 1.0 : 0.7)
-                    * (0.92 + 0.08 * Math.sin(frame * 0.08 + i));
-            int x1 = (int) (cx + Math.cos(ang) * br * 0.8), y1 = (int) (cy + Math.sin(ang) * br * 0.8);
-            int x2 = (int) (cx + Math.cos(ang) * (br + len)), y2 = (int) (cy + Math.sin(ang) * (br + len));
-            g2.setColor(new Color(60, 24, 72));
-            g2.drawLine(x1, y1, x2, y2);
-            g2.setColor(new Color(200, 120, 220));
-            g2.fillOval(x2 - 1, y2 - 1, 3, 3); // glinting tip
+    /** A pale falling column with streaks marching downward. */
+    private void drawWaterfall(Graphics2D g, Waterfall f) {
+        int x0 = gx(f.left()), x1 = gx(f.right()), y0 = gx(f.top()), y1 = gx(f.bottom());
+        int ww = x1 - x0, hh = y1 - y0;
+        g.setColor(new Color(182, 222, 240, 130));
+        g.fillRect(x0, y0, ww, hh);
+        g.setColor(new Color(245, 252, 255, 140));
+        g.fillRect(x0, y0, 1, hh);
+        g.fillRect(x1 - 1, y0, 1, hh);
+
+        int lanes = Math.max(3, ww / 3);
+        for (int i = 0; i < lanes; i++) {
+            int h = hash(i, x0 * 17 + y0);
+            int lx = x0 + 1 + h % Math.max(1, ww - 2);
+            int period = 10 + (h >>> 5) % 6;
+            int len = 4 + (h >>> 9) % 4;
+            int scroll = (int) ((frame * (1.2 + (h % 3) * 0.4) + (h >>> 12)) % period);
+            g.setColor(new Color(255, 255, 255, 120 + (h >>> 3) % 110));
+            for (int sy = y0 - period + scroll; sy < y1; sy += period) {
+                int a = Math.max(y0, sy), b = Math.min(y1, sy + len);
+                if (b > a) g.fillRect(lx, a, 1, b - a);
+            }
         }
-        int d = (int) (br * 2);
-        g2.setPaint(new GradientPaint((float) (cx - br), (float) (cy - br), new Color(130, 60, 150),
-                (float) (cx + br), (float) (cy + br), new Color(40, 14, 52)));
-        g2.fillOval((int) (cx - br), (int) (cy - br), d, d);
-        g2.setColor(new Color(220, 170, 235, 110)); // highlight
-        g2.fillOval((int) (cx - br * 0.55), (int) (cy - br * 0.6), (int) (br * 0.6), (int) (br * 0.45));
-        // Mean little eyes so it reads as an enemy.
-        g2.setColor(new Color(255, 230, 120));
-        g2.fillOval((int) (cx - br * 0.45), (int) (cy - br * 0.05), 5, 5);
-        g2.fillOval((int) (cx + br * 0.2), (int) (cy - br * 0.05), 5, 5);
+        // Foam where it pours over the top.
+        g.setColor(new Color(255, 255, 255, 230));
+        g.fillRect(x0, y0, ww, 1);
+        for (int x = x0; x < x1; x += 2) {
+            if (((x + frame / 6) & 3) == 0) g.fillRect(x, y0 + 1, 1, 1);
+        }
+    }
+
+    /** One-way ledge: a thin marble beam with gold end caps. */
+    private void drawPlatform(Graphics2D g, Platform pf) {
+        int x0 = gx(pf.left()), x1 = gx(pf.right()), y = gx(pf.top());
+        int w = x1 - x0;
+        g.setColor(OUTLINE);
+        g.fillRect(x0, y - 1, w, 1);
+        g.fillRect(x0, y + 2, w, 1);
+        g.setColor(MARBLE_HI);
+        g.fillRect(x0, y, w, 1);
+        g.setColor(MARBLE_SHADE);
+        g.fillRect(x0, y + 1, w, 1);
+        // Dotted gold inlay along the underside.
+        g.setColor(GOLD);
+        for (int x = x0 + 3; x < x1 - 2; x += 6) {
+            g.fillRect(x, y + 1, 1, 1);
+        }
+        // End caps.
+        g.setColor(OUTLINE);
+        g.fillRect(x0 - 1, y - 1, 1, 4);
+        g.fillRect(x1, y - 1, 1, 4);
+        g.setColor(GOLD_DARK);
+        g.fillRect(x0, y, 1, 2);
+        g.fillRect(x1 - 1, y, 1, 2);
+    }
+
+    /** The abyss: the black void, wisping at its rim and lined with pale thorns. */
+    private void drawHazard(Graphics2D g, Hazard h) {
+        int x0 = gx(h.left()), x1 = gx(h.right()), y0 = gx(h.top()), y1 = gx(h.bottom());
+        g.setColor(VOID);
+        g.fillRect(x0, y0, x1 - x0, y1 - y0);
+
+        // Wavering void tendrils licking up from the rim.
+        for (int x = x0; x < x1; x++) {
+            double wv = Math.sin(x * 0.37 + frame * 0.05) + Math.sin(x * 0.11 - frame * 0.03) * 1.4;
+            int up = (int) Math.max(0, Math.round(wv + 1));
+            if (up > 0) {
+                g.setColor(VOID);
+                g.fillRect(x, y0 - up, 1, up);
+            }
+            if (((x * 7 + frame / 8) % 29) == 0) {
+                g.setColor(VOID_EDGE);
+                g.fillRect(x, y0 - up - 2, 1, 1); // stray drifting fleck
+            }
+        }
+
+        // Pale thorns jutting up from the void.
+        for (int sx = x0 + 1; sx < x1 - 5; sx += 6) {
+            int hgt = 4 + hash(sx, 3) % 4;
+            int lean = (hash(sx, 5) % 3) - 1;
+            for (int k = 0; k < hgt; k++) {
+                int half = (hgt - k) * 2 / hgt; // 2 -> 0 toward the tip
+                int cx = sx + 2 + (k * lean) / hgt;
+                int y = y0 - k;
+                g.setColor(OUTLINE);
+                g.fillRect(cx - half - 1, y, half * 2 + 3, 1);
+                g.setColor(k > hgt / 2 ? MARBLE_HI : MARBLE_MID);
+                g.fillRect(cx - half, y, half * 2 + 1, 1);
+                g.setColor(MARBLE_SHADE);
+                if (half > 0) g.fillRect(cx + half, y, 1, 1);
+            }
+            g.setColor(OUTLINE);
+            g.fillRect(sx + 2 + lean, y0 - hgt, 1, 1);
+        }
     }
 
     /** The cached sprite for a block, rendering it on first use. */
@@ -680,54 +748,335 @@ public final class GamePanel extends JPanel {
     }
 
     /**
-     * Render a block once into a sprite. The box's top-left sits at
-     * (BLOCK_PAD, BLOCK_PAD) inside the image, so draw it at
-     * (b.x - BLOCK_PAD, b.y - BLOCK_PAD).
+     * Render a block once into a grid-resolution sprite. The box's top-left is
+     * at (BLOCK_PAD, BLOCK_PAD) in the image, so draw it at
+     * (gx(b.x) - BLOCK_PAD, gx(b.y) - BLOCK_PAD).
      */
     private static BufferedImage renderBlockSprite(Block b) {
-        int w = (int) b.width, h = (int) b.height;
+        int w = gx(b.right()) - gx(b.left()), h = gx(b.bottom()) - gx(b.top());
         BufferedImage img = new BufferedImage(w + 2 * BLOCK_PAD, h + 2 * BLOCK_PAD,
                 BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g2 = img.createGraphics();
-        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g2.translate(BLOCK_PAD, BLOCK_PAD);
-        // Seeded from world position so the look matches the old per-frame draw.
-        Random r = new Random(((long) (int) b.x << 20) ^ ((int) b.y * 31L) ^ w);
-        switch (b.type) {
-            case SOLID -> {
-                g2.setColor(new Color(70, 76, 96));
-                g2.fillRect(0, 0, w, h);
-                g2.setColor(new Color(100, 108, 132));
-                g2.drawRect(0, 0, w, h);
+        Graphics2D g = img.createGraphics();
+        g.translate(BLOCK_PAD, BLOCK_PAD);
+        int seed = (int) b.x * 31 + (int) b.y;
+        boolean ornate = b.type == Block.Type.GRASS;
+        int bodyTop = ornate ? 5 : 1;
+
+        // Marble body laid in offset courses of bricks.
+        g.setColor(MARBLE);
+        g.fillRect(0, 0, w, h);
+        int row = 0;
+        for (int y = bodyTop; y < h - 1; y += 4, row++) {
+            int off = (row & 1) * 5;
+            for (int x = -off; x < w; x += 10) {
+                int bx = Math.max(0, x), bw = Math.min(w, x + 10) - bx;
+                int hsh = hash(x * 13 + row, seed);
+                g.setColor(hsh % 4 == 0 ? MARBLE_HI : MARBLE);
+                g.fillRect(bx, y, bw, Math.min(3, h - 1 - y));
+                g.setColor(MARBLE_HI);
+                g.fillRect(bx, y, Math.max(0, bw - 1), 1);               // lit top edge
+                g.setColor(MARBLE_MID);
+                if (x + 9 < w) g.fillRect(x + 9, y, 1, Math.min(3, h - 1 - y)); // joint
+                if (hsh % 7 == 0 && bw > 4) {                           // hairline vein
+                    g.fillRect(bx + 2 + hsh % 3, y + 1, 2, 1);
+                }
             }
-            case GRASS -> {
-                // Dirt body with speckles.
-                g2.setColor(new Color(110, 78, 52));
-                g2.fillRect(0, 0, w, h);
-                g2.setColor(new Color(92, 62, 42));
-                int count = Math.max(6, (w * h) / 700);
-                for (int i = 0; i < count; i++) {
-                    int bx = r.nextInt(Math.max(1, w));
-                    int by = 12 + r.nextInt(Math.max(1, h - 12));
-                    int bs = 2 + r.nextInt(5);
-                    g2.fillOval(bx, by, bs, bs);
-                }
-                // Grass band across the top, with a brighter lip.
-                g2.setColor(new Color(72, 150, 72));
-                g2.fillRect(0, 0, w, 12);
-                g2.setColor(new Color(118, 202, 104));
-                g2.fillRect(0, 0, w, 4);
-                // Grass blades poking up above the surface.
-                g2.setColor(new Color(96, 182, 92));
-                for (int bx = 3; bx < w; bx += 10) {
-                    int bh = 4 + r.nextInt(6);
-                    g2.fillRect(bx, -bh, 3, bh);
-                }
-                g2.setColor(new Color(50, 40, 32));
-                g2.drawRect(0, 0, w, h);
+            g.setColor(MARBLE_MID);
+            if (y + 3 < h - 1) g.fillRect(0, y + 3, w, 1);               // mortar course
+        }
+        // Shaded underside and right side.
+        g.setColor(MARBLE_SHADE);
+        g.fillRect(0, h - 2, w, 1);
+        g.fillRect(w - 2, bodyTop, 1, h - bodyTop - 1);
+
+        if (ornate) {
+            // Polished capstone overhanging the body by a pixel each side.
+            g.setColor(MARBLE_HI);
+            g.fillRect(-1, 0, w + 2, 2);
+            g.setColor(MARBLE_MID);
+            g.fillRect(-1, 2, w + 2, 1);
+            // Gold inlay line and dentil frieze under the cap.
+            g.setColor(GOLD);
+            g.fillRect(0, 3, w, 1);
+            g.setColor(GOLD_DARK);
+            for (int x = 2; x < w; x += 4) g.fillRect(x, 3, 1, 1);
+            g.setColor(MARBLE_SHADE);
+            for (int x = 0; x < w; x += 4) g.fillRect(x, 4, 2, 1);
+            g.setColor(OUTLINE);
+            g.fillRect(-2, 0, 1, 3);
+            g.fillRect(w + 1, 0, 1, 3);
+            g.fillRect(-1, 3, 1, 1);
+            g.fillRect(w, 3, 1, 1);
+        }
+        // Crisp dark outline.
+        g.setColor(OUTLINE);
+        g.fillRect(ornate ? -1 : 0, -1, ornate ? w + 2 : w, 1);
+        g.fillRect(0, h - 1, w, 1);
+        g.fillRect(0, ornate ? 3 : 0, 1, h - (ornate ? 3 : 0));
+        g.fillRect(w - 1, ornate ? 3 : 0, 1, h - (ornate ? 3 : 0));
+
+        if (ornate) {
+            // Little finials along the top and drop pendants hanging beneath.
+            for (int x = 6; x < w - 4; x += 16) {
+                g.setColor(OUTLINE);
+                g.fillRect(x - 1, -2, 3, 1);
+                g.fillRect(x, -3, 1, 1);
+                g.setColor(MARBLE_HI);
+                g.fillRect(x, -2, 1, 1);
+            }
+            for (int x = 4; x < w - 4; x += 12) {
+                g.setColor(OUTLINE);
+                g.fillRect(x - 1, h, 4, 1);
+                g.fillRect(x, h + 1, 2, 1);
+                g.setColor(MARBLE_MID);
+                g.fillRect(x, h, 2, 1);
+                g.setColor(GOLD);
+                g.fillRect(x, h + 2, 2, 1);
             }
         }
-        g2.dispose();
+        g.dispose();
         return img;
+    }
+
+    // ---------------------------------------------------------------- actors
+
+    /** The player: a small dark orb with a pale rim light — ink on marble. */
+    private void drawPlayer(Graphics2D g, Player p) {
+        double cx = p.pos.x / PX, cy = p.pos.y / PX, r = p.radius / PX;
+        g.setColor(new Color(20, 18, 30));
+        disc(g, cx, cy, r);
+        g.setColor(new Color(46, 42, 64));
+        disc(g, cx, cy, r - 1);
+        g.setColor(new Color(64, 60, 88));
+        disc(g, cx - 0.8, cy - 0.8, r - 2.2);
+        // Pale rim light along the lower right (reflected marble).
+        g.setColor(new Color(200, 198, 220));
+        int ix = (int) Math.floor(cx), iy = (int) Math.floor(cy), ir = (int) Math.round(r);
+        g.fillRect(ix + ir - 2, iy + 1, 1, 2);
+        g.fillRect(ix + 1, iy + ir - 2, 2, 1);
+        // Specular highlight.
+        g.setColor(new Color(244, 244, 252));
+        g.fillRect(ix - ir / 2 - 1, iy - ir / 2 - 1, 2, 1);
+        g.fillRect(ix - ir / 2 - 1, iy - ir / 2, 1, 1);
+    }
+
+    /** Splash droplets as tiny pale pixels, stretched when falling fast. */
+    private void drawSplash(Graphics2D g) {
+        for (Droplet d : droplets) {
+            int a = (int) (240 * Math.min(1.0, d.life / d.maxLife * 2));
+            int s = d.size > 4.5 ? 2 : 1;
+            int sy = s + (Math.abs(d.vy) > 500 ? 1 : 0);
+            int x = gx(d.x), y = gx(d.y);
+            g.setColor(new Color(196, 230, 246, a));
+            g.fillRect(x, y, s, sy);
+            g.setColor(new Color(255, 255, 255, a));
+            g.fillRect(x, y, 1, 1);
+        }
+    }
+
+    /** Death effect: a dotted expanding ring and pale shards bursting outward. */
+    private void drawDeathBurst(Graphics2D g) {
+        double e = world.deathElapsed;
+        double cx = world.deathX / PX, cy = world.deathY / PX;
+
+        double rad = e * 260 / PX;
+        int ringA = (int) Math.max(0, 230 - e * 240);
+        if (ringA > 0 && rad > 0.5) {
+            g.setColor(new Color(255, 255, 255, ringA));
+            int steps = Math.max(12, (int) (rad * 6));
+            for (int i = 0; i < steps; i++) {
+                if ((i / 2) % 2 == 1) continue; // dashed
+                double ang = i * Math.PI * 2 / steps;
+                g.fillRect((int) Math.floor(cx + Math.cos(ang) * rad),
+                        (int) Math.floor(cy + Math.sin(ang) * rad), 1, 1);
+            }
+        }
+        Random r = new Random(99);
+        for (int i = 0; i < 26; i++) {
+            double ang = r.nextDouble() * Math.PI * 2;
+            double dist = (40 + r.nextDouble() * 160) * e / PX;
+            int bx = (int) Math.floor(cx + Math.cos(ang) * dist);
+            int by = (int) Math.floor(cy + Math.sin(ang) * dist - e * 60 / PX);
+            int ba = (int) Math.max(0, 230 - e * 170);
+            int s = r.nextInt(3) == 0 ? 2 : 1;
+            if (ba <= 0) continue;
+            g.setColor(new Color(i % 3 == 0 ? 46 : 255, i % 3 == 0 ? 42 : 255,
+                    i % 3 == 0 ? 64 : 255, ba));
+            g.fillRect(bx, by, s, s);
+        }
+    }
+
+    /** A thorned sentinel orb: void core, pale-tipped spines, one cold eye-slit. */
+    private void drawUrchin(Graphics2D g, Urchin u) {
+        double cx = u.x / PX, cy = u.y / PX, br = u.bodyRadius / PX;
+        int spines = 16;
+        double sway = Math.sin(frame * 0.04) * 0.08;
+        for (int i = 0; i < spines; i++) {
+            double ang = i * Math.PI * 2 / spines + sway;
+            double len = u.spineLength / PX * (i % 2 == 0 ? 1.0 : 0.65)
+                    * (0.9 + 0.1 * Math.sin(frame * 0.08 + i));
+            int x1 = (int) Math.floor(cx + Math.cos(ang) * br);
+            int y1 = (int) Math.floor(cy + Math.sin(ang) * br);
+            int x2 = (int) Math.floor(cx + Math.cos(ang) * (br + len));
+            int y2 = (int) Math.floor(cy + Math.sin(ang) * (br + len));
+            g.setColor(OUTLINE);
+            g.drawLine(x1, y1, x2, y2);
+            g.setColor(MARBLE_HI);
+            g.fillRect(x2, y2, 1, 1);
+        }
+        g.setColor(OUTLINE);
+        disc(g, cx, cy, br + 0.6);
+        g.setColor(VOID);
+        disc(g, cx, cy, br - 0.4);
+        g.setColor(VOID_EDGE);
+        disc(g, cx - 0.7, cy - 0.7, br - 1.6);
+        // A pale ring of plating and a narrow glowing eye.
+        int ix = (int) Math.floor(cx), iy = (int) Math.floor(cy);
+        g.setColor(MARBLE_MID);
+        g.fillRect(ix - 2, iy - (int) br, 4, 1);
+        boolean blink = (frame % 180) < 6;
+        g.setColor(new Color(255, 250, 236));
+        g.fillRect(ix - 1, iy, 3, blink ? 0 : 1);
+        g.setColor(GOLD);
+        g.fillRect(ix - 2, iy, 1, blink ? 0 : 1);
+        g.fillRect(ix + 2, iy, 1, blink ? 0 : 1);
+    }
+
+    /** The finish: a slender white pillar flying an ivory pennant; gilds on win. */
+    private void drawFinish(Graphics2D g, Finish f) {
+        int poleX = gx(f.left()) + 5;
+        int baseY = gx(f.bottom() - Level.FINISH_SINK);
+        int topY = gx(f.top()) + 3;
+        boolean won = world.finished;
+
+        // Pedestal.
+        g.setColor(OUTLINE);
+        g.fillRect(poleX - 3, baseY - 3, 8, 3);
+        g.setColor(MARBLE_HI);
+        g.fillRect(poleX - 2, baseY - 3, 6, 1);
+        g.setColor(MARBLE_MID);
+        g.fillRect(poleX - 2, baseY - 2, 6, 1);
+        // Pole.
+        g.setColor(OUTLINE);
+        g.fillRect(poleX - 1, topY, 4, baseY - 3 - topY);
+        g.setColor(MARBLE_HI);
+        g.fillRect(poleX, topY, 1, baseY - 3 - topY);
+        g.setColor(MARBLE_SHADE);
+        g.fillRect(poleX + 1, topY, 1, baseY - 3 - topY);
+        for (int y = topY + 4; y < baseY - 4; y += 5) { // gold bands
+            g.setColor(GOLD);
+            g.fillRect(poleX, y, 2, 1);
+        }
+        // Finial orb, glowing when won.
+        if (won) {
+            int a = 90 + (int) (60 * Math.sin(frame * 0.15));
+            g.setColor(new Color(255, 236, 170, a));
+            disc(g, poleX + 1, topY - 2, 4.5);
+        }
+        g.setColor(OUTLINE);
+        disc(g, poleX + 1, topY - 2, 2.2);
+        g.setColor(won ? new Color(255, 240, 180) : GOLD);
+        disc(g, poleX + 1, topY - 2, 1.3);
+
+        // Swallow-tailed pennant, each row rippling a pixel with the breeze.
+        int fw = 13, fh = 9, fy = topY + 1;
+        Color cloth = won ? GOLD : MARBLE_HI, trim = won ? GOLD_DARK : GOLD;
+        for (int k = 0; k < fh; k++) {
+            int wave = (int) Math.round(Math.sin(frame * 0.12 - k * 0.6));
+            int notch = Math.max(0, 3 - Math.abs(k - fh / 2) * 3 / (fh / 2)); // swallowtail cut
+            int len = fw - notch + wave;
+            int x = poleX + 3;
+            boolean edge = k == 0 || k == fh - 1;
+            g.setColor(OUTLINE);
+            g.fillRect(x, fy + k, len + 1, 1);
+            if (!edge) {
+                g.setColor(k == 1 || k == 2 ? trim : cloth);
+                g.fillRect(x, fy + k, len, 1);
+            }
+            if (!edge && k > fh / 2) {
+                g.setColor(won ? GOLD_DARK : MARBLE_MID); // cloth shading
+                g.fillRect(x + len - 3, fy + k, 2, 1);
+            }
+        }
+        g.setColor(OUTLINE);
+        g.fillRect(poleX + 3, fy - 1, fw - 2, 1);
+        g.fillRect(poleX + 3, fy + fh, fw - 2, 1);
+    }
+
+    // ---------------------------------------------------------------- overlays
+
+    /** "LEVEL COMPLETE!" — a soft white wash with ink-and-gold lettering. */
+    private void drawVictoryOverlay(Graphics2D g2, int viewW, int viewH) {
+        double appear = Math.min(1.0, world.finishElapsed / 0.4);
+        g2.setColor(new Color(250, 249, 253, (int) (appear * 175)));
+        g2.fillRect(0, 0, viewW, viewH);
+
+        int ty = viewH / 2;
+        int size = 18, scale = Math.max(3, viewW / 240);
+        pixelText(g2, "LEVEL COMPLETE!", viewW / 2, ty, size, scale,
+                withAlpha(new Color(40, 36, 58), (int) (appear * 255)),
+                withAlpha(GOLD, (int) (appear * 255)), true);
+
+        double btnAppear = Math.max(0, Math.min(1.0, (world.finishElapsed - 0.3) / 0.3));
+        if (btnAppear <= 0) {
+            return;
+        }
+        drawOverlayButton(g2, "Play Again", viewW, viewH, ty + 40, btnAppear,
+                MARBLE_HI, GOLD, new Color(40, 36, 58), OUTLINE, new Color(110, 104, 136));
+    }
+
+    /** "YOU DIED" — the void closes in; pale lettering and a Retry button. */
+    private void drawDiedOverlay(Graphics2D g2, int viewW, int viewH) {
+        double e = world.deathElapsed;
+        double appear = Math.min(1.0, e / 0.5);
+        g2.setColor(withAlpha(VOID, (int) (appear * 210)));
+        g2.fillRect(0, 0, viewW, viewH);
+
+        int ty = viewH / 2;
+        int scale = Math.max(4, viewW / 200);
+        pixelText(g2, "YOU DIED", viewW / 2, ty, 18, scale,
+                withAlpha(MARBLE_HI, (int) (appear * 255)),
+                withAlpha(new Color(120, 60, 80), (int) (appear * 255)), true);
+        pixelText(g2, "Pricked by a sea urchin", viewW / 2, ty + 36, 10, 2,
+                withAlpha(MARBLE_SHADE, (int) (appear * 230)), null, true);
+
+        double btnAppear = Math.max(0, Math.min(1.0, (e - DIED_BUTTON_DELAY + 0.3) / 0.3));
+        drawOverlayButton(g2, "Retry", viewW, viewH, ty + 64, btnAppear,
+                VOID_EDGE, new Color(78, 72, 102), MARBLE_HI, MARBLE_SHADE, MARBLE_SHADE);
+    }
+
+    /**
+     * A centred pixel-style button with notched corners (sets
+     * {@link #overlayBtn}) and a key hint below it.
+     */
+    private void drawOverlayButton(Graphics2D g2, String label, int viewW, int viewH, int y,
+                                   double appear, Color fill, Color hotFill, Color text,
+                                   Color border, Color hint) {
+        if (appear <= 0) {
+            return;
+        }
+        int bw = Math.max(200, viewW / 6) / PX * PX, bh = Math.max(52, viewH / 13) / PX * PX;
+        int bx = (viewW / 2 - bw / 2) / PX * PX;
+        overlayBtn.setBounds(bx, y, bw, bh);
+        int ba = (int) (appear * 255);
+        Color f = btnHover && buttonReady() ? hotFill : fill;
+
+        // Border with chamfered corners, then fill, then a lit top row.
+        g2.setColor(withAlpha(border, ba));
+        g2.fillRect(bx + PX, y, bw - 2 * PX, bh);
+        g2.fillRect(bx, y + PX, bw, bh - 2 * PX);
+        g2.setColor(withAlpha(f, ba));
+        g2.fillRect(bx + PX, y + PX, bw - 2 * PX, bh - 2 * PX);
+        g2.setColor(withAlpha(new Color(255, 255, 255), ba / 3));
+        g2.fillRect(bx + 2 * PX, y + PX, bw - 4 * PX, PX);
+        g2.setColor(withAlpha(GOLD, ba));
+        g2.fillRect(bx + PX, y + bh - 2 * PX, bw - 2 * PX, PX / 2);
+
+        FontMetrics lfm = getFontMetrics(new Font(Font.SANS_SERIF, Font.BOLD, 12));
+        int th = (lfm.getAscent() + lfm.getDescent()) * 2;
+        pixelText(g2, label, viewW / 2, y + (bh - th) / 2 + lfm.getAscent() * 2, 12, 2,
+                withAlpha(text, ba), null, true);
+        pixelText(g2, "Click or press Enter / R", viewW / 2, y + bh + 28, 8, 2,
+                withAlpha(hint, (int) (appear * 230)), null, true);
     }
 }
