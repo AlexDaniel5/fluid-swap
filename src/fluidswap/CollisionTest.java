@@ -47,6 +47,12 @@ public final class CollisionTest {
         testWalkAcrossAdjacentBlocks();
         testRealLevelValidates();
         testValidatorCatchesBadLayout();
+        testDashIsStraightFixedBurst();
+        testDashFollowsFacing();
+        testOneAirDashUntilLanding();
+        testDashCooldown();
+        testDashStoppedByWall();
+        testDashRefilledByWater();
 
         System.out.printf("%n%d passed, %d failed%n", passed, failed);
         if (failed > 0) {
@@ -637,6 +643,101 @@ public final class CollisionTest {
         check("validator flags a floating finish", all.contains("no block top to stand on"));
         check("validator flags a waterfall outside pools",
                 all.contains("does not start inside a pool") && all.contains("does not end inside a pool"));
+    }
+
+    // --- dash -------------------------------------------------------------
+
+    /** A player hanging in empty air (no terrain), facing right. */
+    private static World airWorld(Player p) {
+        return new World(p);
+    }
+
+    private static void testDashIsStraightFixedBurst() {
+        Player p = new Player(100, 100, 20);
+        World w = airWorld(p);
+        w.dashRequested = true;
+        double dt = 1.0 / 240.0;
+        w.step(dt);
+        check("dash starts on request", p.dashing());
+        double y0 = p.pos.y;
+        double x0 = p.pos.x - World.DASH_SPEED * dt;
+        while (p.dashing()) w.step(dt);
+        double dist = p.pos.x - x0;
+        double expected = World.DASH_SPEED * World.DASH_DURATION;
+        check("dash covers ~DASH_SPEED*DASH_DURATION (" + round(expected) + ", got " + round(dist) + ")",
+                Math.abs(dist - expected) < World.DASH_SPEED * dt * 1.5);
+        check("dash ignores gravity: no drop mid-air (dy=" + round(p.pos.y - y0) + ")",
+                Math.abs(p.pos.y - y0) < 0.01);
+        check("after the dash speed drops back to the medium cap (vx=" + round(p.vel.x) + ")",
+                Math.abs(p.vel.x) <= World.AIR_SPEED + 1e-9);
+    }
+
+    private static void testDashFollowsFacing() {
+        Player p = new Player(500, 100, 20);
+        World w = airWorld(p);
+        w.moveDir = -1;
+        w.step(1.0 / 240.0);   // face left
+        w.moveDir = 0;
+        double x0 = p.pos.x;
+        w.dashRequested = true;
+        simulate(w, World.DASH_DURATION);
+        check("dash goes the way the player last faced (left)", p.pos.x < x0 - 100);
+        check("facing is recorded as -1", p.facing == -1);
+    }
+
+    private static void testOneAirDashUntilLanding() {
+        Player p = new Player(100, 100, 20);
+        World w = airWorld(p);
+        w.addBlock(new Block(0, 1000, 2000, 100, Block.Type.SOLID)); // far-below floor
+        w.dashRequested = true;
+        simulate(w, World.DASH_DURATION + World.DASH_COOLDOWN + 0.05);
+        check("first air dash spends the dash", !p.dashReady && !p.dashing());
+        int before = w.dashes;
+        w.dashRequested = true;
+        w.step(1.0 / 240.0);
+        check("no second dash before landing", w.dashes == before && !p.dashing());
+        simulate(w, 2.0); // fall to the floor
+        check("landing refills the dash", p.onGround && p.dashReady);
+        w.dashRequested = true;
+        w.step(1.0 / 240.0);
+        check("can dash again after landing", w.dashes == before + 1);
+    }
+
+    private static void testDashCooldown() {
+        Player p = new Player(100, 480, 20);
+        World w = new World(p);
+        w.addBlock(new Block(0, 500, 3000, 100, Block.Type.SOLID));
+        simulate(w, 0.2); // settle on the ground
+        w.dashRequested = true;
+        simulate(w, World.DASH_DURATION + 0.05); // dash ends, cooldown running
+        int before = w.dashes;
+        w.dashRequested = true;
+        w.step(1.0 / 240.0);
+        check("no dash during the cooldown", w.dashes == before);
+        simulate(w, World.DASH_COOLDOWN);
+        w.dashRequested = true;
+        w.step(1.0 / 240.0);
+        check("dash available again once the cooldown passes", w.dashes == before + 1);
+    }
+
+    private static void testDashStoppedByWall() {
+        Player p = new Player(100, 100, 20);
+        World w = new World(p);
+        w.addBlock(new Block(160, 0, 40, 400, Block.Type.SOLID)); // wall face at x=160
+        w.dashRequested = true;
+        simulate(w, 0.05);
+        check("dash does not tunnel through a wall (right=" + round(p.right()) + ")",
+                p.right() <= 160.5);
+        check("hitting a wall ends the dash", !p.dashing());
+    }
+
+    private static void testDashRefilledByWater() {
+        Player p = new Player(100, 100, 20);
+        World w = new World(p);
+        w.addWater(new Water(200, 0, 400, 400)); // dash right into a pool
+        w.dashRequested = true;
+        simulate(w, World.DASH_DURATION + 0.02);
+        check("dashing into water refills the dash", p.inWater && p.dashReady);
     }
 
     // --- helpers ---------------------------------------------------------

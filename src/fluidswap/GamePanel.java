@@ -34,6 +34,7 @@ public final class GamePanel extends JPanel {
     private final World world;
 
     private boolean left, right, jump, down;
+    private boolean dashHeld; // F is down (a dash fires once per press, not on key repeat)
     private long frame; // animation counter for the waterfalls
 
     // Blocks are static, so each is rendered once into a sprite (see
@@ -74,7 +75,14 @@ public final class GamePanel extends JPanel {
 
     private static final class Droplet {
         double x, y, vx, vy, life, maxLife, size;
+        boolean smoke; // void wisp from a dash: no gravity, drifts and fades
     }
+
+    // Dash effects (view-layer only): fading afterimages left along the dash
+    // path, plus a puff of void smoke where it starts.
+    private static final double GHOST_LIFE = 0.22;
+    private final List<double[]> ghosts = new ArrayList<>(); // {x, y, life}
+    private int seenDashes;
 
     public GamePanel(World world) {
         this.world = world;
@@ -122,6 +130,12 @@ public final class GamePanel extends JPanel {
             case KeyEvent.VK_RIGHT, KeyEvent.VK_D -> right = down;
             case KeyEvent.VK_SPACE, KeyEvent.VK_UP, KeyEvent.VK_W -> jump = down;
             case KeyEvent.VK_DOWN, KeyEvent.VK_S -> this.down = down;
+            case KeyEvent.VK_F -> {
+                if (down && !dashHeld) {
+                    world.dashRequested = true;
+                }
+                dashHeld = down;
+            }
         }
     }
 
@@ -136,8 +150,10 @@ public final class GamePanel extends JPanel {
     /** Restart the level and reset view-only effects back to a fresh start. */
     private void playAgain() {
         world.restart();
-        left = right = jump = down = false;
+        left = right = jump = down = dashHeld = false;
         droplets.clear();
+        ghosts.clear();
+        seenDashes = world.dashes;
         dripTime = dripAccum = splashCooldown = 0;
         seenWaterExits = world.waterExits;
         prevDead = false;
@@ -164,10 +180,48 @@ public final class GamePanel extends JPanel {
             respawnFade = Math.max(0, respawnFade - dt);
         }
         prevDead = world.dead;
+        updateDashFx(dt);
         updateSplash(dt);
         updateCamera(dt);
         frame++;
         repaint();
+    }
+
+    /** Puff of smoke when a dash starts; afterimages while it runs; age them. */
+    private void updateDashFx(double dt) {
+        Player p = world.player;
+        if (world.dashes != seenDashes) {
+            seenDashes = world.dashes;
+            for (int i = 0; i < 14; i++) {
+                Droplet d = new Droplet();
+                d.smoke = true;
+                d.x = p.pos.x - p.facing * p.radius * 0.6 + (fx.nextDouble() - 0.5) * 8;
+                d.y = p.pos.y + (fx.nextDouble() - 0.5) * p.radius * 1.6;
+                d.vx = -p.facing * (60 + fx.nextDouble() * 160);
+                d.vy = (fx.nextDouble() - 0.5) * 120 - 30;
+                d.life = d.maxLife = 0.3 + fx.nextDouble() * 0.3;
+                d.size = 1 + fx.nextInt(2);
+                droplets.add(d);
+            }
+        }
+        for (Iterator<double[]> it = ghosts.iterator(); it.hasNext(); ) {
+            double[] gh = it.next();
+            gh[2] -= dt;
+            if (gh[2] <= 0) it.remove();
+        }
+        if (p.dashing() && !world.dead) {
+            ghosts.add(new double[] {p.pos.x, p.pos.y, GHOST_LIFE});
+            // A thin streak of wisps shed from the trailing edge.
+            Droplet d = new Droplet();
+            d.smoke = true;
+            d.x = p.pos.x - p.facing * p.radius;
+            d.y = p.pos.y + (fx.nextDouble() - 0.5) * p.radius * 1.4;
+            d.vx = -p.facing * 40;
+            d.vy = -20 - fx.nextDouble() * 30;
+            d.life = d.maxLife = 0.25 + fx.nextDouble() * 0.2;
+            d.size = 1;
+            droplets.add(d);
+        }
     }
 
     /** Spawn a splash when the player leaves water, then advance all particles. */
@@ -207,7 +261,13 @@ public final class GamePanel extends JPanel {
                 it.remove();
                 continue;
             }
-            d.vy += SPLASH_GRAVITY * dt;
+            if (d.smoke) {
+                double drag = Math.max(0, 1 - 6 * dt);
+                d.vx *= drag;
+                d.vy = d.vy * drag - 40 * dt; // curls gently upward
+            } else {
+                d.vy += SPLASH_GRAVITY * dt;
+            }
             d.x += d.vx * dt;
             d.y += d.vy * dt;
         }
@@ -384,6 +444,7 @@ public final class GamePanel extends JPanel {
         }
 
         Player p = world.player;
+        drawGhosts(c, p);
         if (!world.dead) {
             drawPlayer(c, p);
         } else {
@@ -424,9 +485,12 @@ public final class GamePanel extends JPanel {
                 case AIR -> "AIR (medium)";
             };
             Color hud = new Color(104, 100, 128);
-            pixelText(g2, "Move: A/D or ←/→   Jump/Swim/Climb up: Space/W/↑   Climb down: S/↓",
+            pixelText(g2, "Move: A/D or ←/→   Jump/Swim/Climb up: Space/W/↑   Climb down: S/↓   Dash: F",
                     12, 22, 9, 2, hud, MARBLE_HI, false);
-            pixelText(g2, "Medium: " + medium + "   speed=" + (int) world.activeMoveSpeed(),
+            String dash = p.dashing() ? "DASHING"
+                    : p.dashReady && p.dashCooldown == 0 ? "ready" : "spent";
+            pixelText(g2, "Medium: " + medium + "   speed=" + (int) world.activeMoveSpeed()
+                    + "   dash: " + dash,
                     12, 44, 9, 2, hud, MARBLE_HI, false);
         }
     }
@@ -453,14 +517,19 @@ public final class GamePanel extends JPanel {
 
     /** Fill a filled pixel disc centred at (cx, cy) in grid units. */
     private static void disc(Graphics2D g, double cx, double cy, double r) {
-        int x0 = (int) Math.floor(cx - r), x1 = (int) Math.ceil(cx + r);
-        int y0 = (int) Math.floor(cy - r), y1 = (int) Math.ceil(cy + r);
-        double r2 = r * r;
+        blob(g, cx, cy, r, r);
+    }
+
+    /** Fill a filled pixel ellipse with radii (rx, ry) centred at (cx, cy). */
+    private static void blob(Graphics2D g, double cx, double cy, double rx, double ry) {
+        if (rx <= 0 || ry <= 0) return;
+        int x0 = (int) Math.floor(cx - rx), x1 = (int) Math.ceil(cx + rx);
+        int y0 = (int) Math.floor(cy - ry), y1 = (int) Math.ceil(cy + ry);
         for (int y = y0; y <= y1; y++) {
             int run = -1;
             for (int x = x0; x <= x1 + 1; x++) {
-                double dx = x + 0.5 - cx, dy = y + 0.5 - cy;
-                boolean in = x <= x1 && dx * dx + dy * dy <= r2;
+                double dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry;
+                boolean in = x <= x1 && dx * dx + dy * dy <= 1.0;
                 if (in && run < 0) run = x;
                 if (!in && run >= 0) {
                     g.fillRect(run, y, x - run, 1);
@@ -840,9 +909,31 @@ public final class GamePanel extends JPanel {
 
     // ---------------------------------------------------------------- actors
 
+    /** Dash afterimages: void-dark copies of the orb fading out behind it. */
+    private void drawGhosts(Graphics2D g, Player p) {
+        double r = p.radius / PX;
+        for (double[] gh : ghosts) {
+            double t = gh[2] / GHOST_LIFE; // 1 fresh -> 0 gone
+            g.setColor(new Color(30, 26, 44, (int) (150 * t)));
+            blob(g, gh[0] / PX, gh[1] / PX, r * (0.6 + 0.4 * t), r * (0.45 + 0.4 * t));
+        }
+    }
+
     /** The player: a small dark orb with a pale rim light — ink on marble. */
     private void drawPlayer(Graphics2D g, Player p) {
         double cx = p.pos.x / PX, cy = p.pos.y / PX, r = p.radius / PX;
+        if (p.dashing()) {
+            // Stretched along the dash, with a pale leading edge.
+            double rx = r + 1.5, ry = r - 1;
+            g.setColor(new Color(20, 18, 30));
+            blob(g, cx - p.facing * 0.5, cy, rx, ry);
+            g.setColor(new Color(46, 42, 64));
+            blob(g, cx - p.facing * 0.5, cy, rx - 1, ry - 1);
+            g.setColor(new Color(236, 236, 248));
+            int lead = (int) Math.floor(cx - p.facing * 0.5 + p.facing * (rx - 2));
+            g.fillRect(lead, (int) Math.floor(cy) - 1, 1, 2);
+            return;
+        }
         g.setColor(new Color(20, 18, 30));
         disc(g, cx, cy, r);
         g.setColor(new Color(46, 42, 64));
@@ -863,6 +954,13 @@ public final class GamePanel extends JPanel {
     /** Splash droplets as tiny pale pixels, stretched when falling fast. */
     private void drawSplash(Graphics2D g) {
         for (Droplet d : droplets) {
+            if (d.smoke) {
+                int a = (int) (200 * Math.min(1.0, d.life / d.maxLife * 1.5));
+                int s = (int) d.size;
+                g.setColor(new Color(26, 22, 38, a));
+                g.fillRect(gx(d.x), gx(d.y), s, s);
+                continue;
+            }
             int a = (int) (240 * Math.min(1.0, d.life / d.maxLife * 2));
             int s = d.size > 4.5 ? 2 : 1;
             int sy = s + (Math.abs(d.vy) > 500 ? 1 : 0);

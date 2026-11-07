@@ -82,6 +82,15 @@ public final class World {
     public static final double MAX_FALL_SPEED = 1200.0;    // px / s
     public static final double MAX_SUBSTEP_FRACTION = 0.5; // of player.radius
 
+    // Dash (F): a short, fixed-length horizontal burst in the facing direction.
+    // Gravity and input are ignored for its duration, so it is a dead-straight
+    // line — no fall, no steering. Walls stop it. One dash per jump in mid-air
+    // (refilled by touching ground, water or a waterfall), plus a short cooldown
+    // between dashes. It grants no invulnerability.
+    public static final double DASH_SPEED = 950.0;     // px / s
+    public static final double DASH_DURATION = 0.16;   // seconds (~150 px)
+    public static final double DASH_COOLDOWN = 0.35;   // seconds after a dash ends
+
     // A descending player lands on a one-way platform if their feet were at
     // most this far below its line on the previous substep (absorbs float error).
     public static final double PLATFORM_LANDING_TOLERANCE = 1.0; // px
@@ -100,6 +109,10 @@ public final class World {
     public boolean jumpRequested = false;
     public boolean climbUp = false;  // up/jump key held (climb a waterfall)
     public boolean climbDown = false; // down key held (descend a waterfall)
+    public boolean dashRequested = false; // dash key pressed (one-shot, like a jump)
+
+    // Count of dashes started, so the view can spawn a dash burst when it changes.
+    public int dashes = 0;
 
     // Level completion. `finished` latches true the moment the player reaches a
     // finish region and only clears via restart(), so the goal can't be re-triggered. While
@@ -168,7 +181,8 @@ public final class World {
             // so the level can't be disturbed or the goal re-triggered.
             finishElapsed += dt;
             moveDir = 0;
-            jumpRequested = climbUp = climbDown = false;
+            jumpRequested = climbUp = climbDown = dashRequested = false;
+            player.dashTime = 0;
             player.vel.x = player.vel.y = 0;
             player.pos.x = finishAnchorX;
             player.pos.y = finishAnchorY;
@@ -182,7 +196,8 @@ public final class World {
             // respawn at the start once the effect has played out.
             deathElapsed += dt;
             moveDir = 0;
-            jumpRequested = climbUp = climbDown = false;
+            jumpRequested = climbUp = climbDown = dashRequested = false;
+            player.dashTime = 0;
             player.vel.x = player.vel.y = 0;
             player.pos.x = deathX;
             player.pos.y = deathY;
@@ -198,11 +213,21 @@ public final class World {
         Water startWater = deepestWater();
         boolean enteredStepInWater = startWater != null;
 
-        // Ease horizontal velocity toward the intended speed for this medium.
-        player.vel.x = steerHorizontal(player.vel.x, moveDir * activeMoveSpeed(), dt);
+        updateDash(dt);
+        if (!player.dashing()) {
+            // Ease horizontal velocity toward the intended speed for this medium.
+            player.vel.x = steerHorizontal(player.vel.x, moveDir * activeMoveSpeed(), dt);
+        }
 
         Player.Medium medium = player.medium();
-        if (medium == Player.Medium.WATERFALL) {
+        if (player.dashing()) {
+            // Mid-dash: a straight horizontal line. Gravity, swimming and
+            // climbing are all suspended, and jump input is ignored.
+            player.vel.x = player.facing * DASH_SPEED;
+            player.vel.y = 0;
+            player.onGround = false;
+            jumpRequested = false;
+        } else if (medium == Player.Medium.WATERFALL) {
             // Cling to the rushing water: climb slowly up/down, or slip gently.
             // Gravity is ignored while clinging.
             if (climbUp && !climbDown) {
@@ -256,9 +281,20 @@ public final class World {
         player.inWater = overlapsAny(waters);
         player.onWaterfall = overlapsAny(waterfalls);
 
+        // Tick the dash down after moving (so its first step moves too); it also
+        // ends early if it ran into a wall (its velocity was zeroed).
+        if (player.dashing()) {
+            player.dashTime -= dt;
+            if (player.dashTime <= 0 || player.vel.x == 0) {
+                endDash();
+            }
+        }
+
         // If this step carried the character up and out through the surface
-        // while jump was held, launch them with a strong exit burst.
-        if (enteredStepInWater && !player.inWater && !player.onWaterfall && climbUp) {
+        // while jump was held, launch them with a strong exit burst. (Not when
+        // dashing out sideways — the dash stays a straight line.)
+        if (enteredStepInWater && !player.inWater && !player.onWaterfall && climbUp
+                && !player.dashing()) {
             player.vel.y = -WATER_EXIT_JUMP_SPEED;
             player.onGround = false;
         }
@@ -284,7 +320,37 @@ public final class World {
         }
     }
 
+    /**
+     * Track facing, refill/cool down the dash, and start one if requested. The
+     * active dash is ticked down after movement in {@link #step}.
+     */
+    private void updateDash(double dt) {
+        if (!player.dashing() && moveDir != 0) {
+            player.facing = moveDir > 0 ? 1 : -1;
+        }
+        player.dashCooldown = Math.max(0, player.dashCooldown - dt);
+        if (player.onGround || player.inWater || player.onWaterfall) {
+            player.dashReady = true;
+        }
+
+        if (dashRequested && !player.dashing() && player.dashReady && player.dashCooldown == 0) {
+            player.dashTime = DASH_DURATION;
+            player.dashReady = false;
+            dashes++;
+        }
+        dashRequested = false;
+    }
+
+    /** Stop dashing: drop to normal top speed for the medium and start the cooldown. */
+    private void endDash() {
+        player.dashTime = 0;
+        player.dashCooldown = DASH_COOLDOWN;
+        double cap = activeMoveSpeed();
+        player.vel.x = Math.max(-cap, Math.min(cap, player.vel.x));
+    }
+
     private void die(boolean byEnemy) {
+        player.dashTime = 0;
         dead = true;
         killedByEnemy = byEnemy;
         deathElapsed = 0;
@@ -334,7 +400,7 @@ public final class World {
         finished = false;
         finishElapsed = 0;
         moveDir = 0;
-        jumpRequested = climbUp = climbDown = false;
+        jumpRequested = climbUp = climbDown = dashRequested = false;
         respawn();
     }
 
@@ -349,6 +415,10 @@ public final class World {
         player.onGround = false;
         player.inWater = false;
         player.onWaterfall = false;
+        player.dashTime = 0;
+        player.dashCooldown = 0;
+        player.dashReady = true;
+        player.facing = 1;
     }
 
     /**

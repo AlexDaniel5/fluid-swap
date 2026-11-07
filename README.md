@@ -50,7 +50,26 @@ java -cp out fluidswap.CollisionTest   # tests
 ```
 
 Controls: **A/D** or **←/→** to move, **Space / W / ↑** to jump / swim up /
-climb a waterfall up, **S / ↓** to climb a waterfall down.
+climb a waterfall up, **S / ↓** to climb a waterfall down, **F** to dash.
+
+## Dash
+
+Pressing **F** fires a dash, inspired by Hollow Knight's: a short, fixed-length
+burst in the direction you last moved (`DASH_SPEED = 950` for
+`DASH_DURATION = 0.16` s, about 150 px). While dashing, gravity, swimming and
+climbing are suspended and input is ignored, so the dash is a dead-straight
+line, even off a ledge or across the surface of a pool. It ends early if it
+hits a wall. Afterwards speed drops back to the current medium's top speed.
+
+- **One dash in mid-air.** The dash is spent when used and refilled by touching
+  the ground, water or a waterfall.
+- **Cooldown.** `DASH_COOLDOWN = 0.35` s between dashes.
+- **No invulnerability.** Dashing into an urchin or the pit still kills you.
+- **One dash per key press.** Holding F doesn't repeat it.
+
+The view draws the orb stretched along the dash, leaves fading void-dark
+afterimages behind it, and throws a puff of void smoke where the dash starts.
+The HUD shows whether the dash is `ready`, `spent` or `DASHING`.
 
 ## Layout
 
